@@ -175,6 +175,7 @@ struct dasd_ccw_req {
 	struct dasd_block *block;	/* the originating block device */
 	struct dasd_device *memdev;	/* the device used to allocate this */
 	struct dasd_device *startdev;	/* device the request is started on */
+	struct dasd_device *basedev;	/* base device if no block->base */
 	void *cpaddr;			/* address of ccw or tcw */
 	unsigned char cpmode;		/* 0 = cmd mode, 1 = itcw */
 	char status;			/* status of this request */
@@ -238,6 +239,13 @@ struct dasd_ccw_req {
 
 /* Signature for error recovery functions. */
 typedef struct dasd_ccw_req *(*dasd_erp_fn_t) (struct dasd_ccw_req *);
+
+/*
+ * A single CQR can only contain a maximum of 255 CCWs. It is limited by
+ * the locate record and locate record extended count value which can only hold
+ * 1 Byte max.
+ */
+#define DASD_CQR_MAX_CCW 255
 
 /*
  * Unique identifier for dasd device.
@@ -304,7 +312,7 @@ struct dasd_discipline {
 	 */
 	int (*basic_to_ready) (struct dasd_device *);
 	int (*online_to_ready) (struct dasd_device *);
-	int (*ready_to_basic)  (struct dasd_device *);
+	int (*basic_to_known)(struct dasd_device *);
 
 	/* (struct dasd_device *);
 	 * Device operation functions. build_cp creates a ccw chain for
@@ -321,7 +329,7 @@ struct dasd_discipline {
 	int (*term_IO) (struct dasd_ccw_req *);
 	void (*handle_terminated_request) (struct dasd_ccw_req *);
 	int (*format_device) (struct dasd_device *,
-			      struct format_data_t *);
+			      struct format_data_t *, int enable_pav);
 	int (*free_cp) (struct dasd_ccw_req *, struct request *);
 
 	/*
@@ -356,6 +364,7 @@ struct dasd_discipline {
 
 	int (*get_uid) (struct dasd_device *, struct dasd_uid *);
 	void (*kick_validate) (struct dasd_device *);
+	int (*check_attention)(struct dasd_device *, __u8);
 };
 
 extern struct dasd_discipline *dasd_diag_discipline_pointer;
@@ -381,6 +390,10 @@ struct dasd_path {
 	__u8 tbvpm;
 	__u8 ppm;
 	__u8 npm;
+	/* paths that are not used because of a special condition */
+	__u8 cablepm; /* miss-cabled */
+	__u8 hpfpm;   /* the HPF requirements of the other paths are not met */
+	__u8 cuirpm;  /* CUIR varied offline */
 };
 
 struct dasd_profile_info {
@@ -432,7 +445,7 @@ struct dasd_device {
 	/* Device discipline stuff. */
 	struct dasd_discipline *discipline;
 	struct dasd_discipline *base_discipline;
-	char *private;
+	void *private;
 	struct dasd_path path_data;
 
 	/* Device state and target state. */
@@ -457,6 +470,7 @@ struct dasd_device {
 	struct work_struct restore_device;
 	struct work_struct reload_device;
 	struct work_struct kick_validate;
+	struct work_struct suc_work;
 	struct timer_list timer;
 
 	debug_info_t *debug_area;
@@ -500,7 +514,10 @@ struct dasd_block {
 	struct dasd_profile profile;
 };
 
-
+struct dasd_attention_data {
+	struct dasd_device *device;
+	__u8 lpum;
+};
 
 /* reasons why device (ccw_device_start) was stopped */
 #define DASD_STOPPED_NOT_ACC 1         /* not accessible */
@@ -525,6 +542,8 @@ struct dasd_block {
 #define DASD_FLAG_SAFE_OFFLINE	10	/* safe offline processing requested*/
 #define DASD_FLAG_SAFE_OFFLINE_RUNNING	11	/* safe offline running */
 #define DASD_FLAG_ABORTALL	12	/* Abort all noretry requests */
+#define DASD_FLAG_PATH_VERIFY	13	/* Path verification worker running */
+#define DASD_FLAG_SUC		14	/* unhandled summary unit check */
 
 #define DASD_SLEEPON_START_TAG	((void *) 1)
 #define DASD_SLEEPON_END_TAG	((void *) 2)
@@ -642,7 +661,7 @@ dasd_check_blocksize(int bsize)
 #define DASD_PROFILE_GLOBAL_ONLY 2
 
 extern debug_info_t *dasd_debug_area;
-extern struct dasd_profile_info dasd_global_profile_data;
+extern struct dasd_profile dasd_global_profile;
 extern unsigned int dasd_global_profile_level;
 extern const struct block_device_operations dasd_device_operations;
 
@@ -719,7 +738,6 @@ int dasd_device_is_ro(struct dasd_device *);
 void dasd_profile_reset(struct dasd_profile *);
 int dasd_profile_on(struct dasd_profile *);
 void dasd_profile_off(struct dasd_profile *);
-void dasd_global_profile_reset(void);
 char *dasd_get_user_string(const char __user *, size_t);
 
 /* externals in dasd_devmap.c */

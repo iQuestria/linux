@@ -34,9 +34,38 @@ static inline u32 vsp1_wpf_read(struct vsp1_rwpf *wpf, u32 reg)
 
 static inline void vsp1_wpf_write(struct vsp1_rwpf *wpf, u32 reg, u32 data)
 {
-	vsp1_write(wpf->entity.vsp1,
-		   reg + wpf->entity.index * VI6_WPF_OFFSET, data);
+	vsp1_mod_write(&wpf->entity,
+		       reg + wpf->entity.index * VI6_WPF_OFFSET, data);
 }
+
+/* -----------------------------------------------------------------------------
+ * Controls
+ */
+
+static int wpf_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct vsp1_rwpf *wpf =
+		container_of(ctrl->handler, struct vsp1_rwpf, ctrls);
+	u32 value;
+
+	if (!vsp1_entity_is_streaming(&wpf->entity))
+		return 0;
+
+	switch (ctrl->id) {
+	case V4L2_CID_ALPHA_COMPONENT:
+		value = vsp1_wpf_read(wpf, VI6_WPF_OUTFMT);
+		value &= ~VI6_WPF_OUTFMT_PDV_MASK;
+		value |= ctrl->val << VI6_WPF_OUTFMT_PDV_SHIFT;
+		vsp1_wpf_write(wpf, VI6_WPF_OUTFMT, value);
+		break;
+	}
+
+	return 0;
+}
+
+static const struct v4l2_ctrl_ops wpf_ctrl_ops = {
+	.s_ctrl = wpf_s_ctrl,
+};
 
 /* -----------------------------------------------------------------------------
  * V4L2 Subdevice Core Operations
@@ -44,40 +73,50 @@ static inline void vsp1_wpf_write(struct vsp1_rwpf *wpf, u32 reg, u32 data)
 
 static int wpf_s_stream(struct v4l2_subdev *subdev, int enable)
 {
+	struct vsp1_pipeline *pipe = to_vsp1_pipeline(&subdev->entity);
 	struct vsp1_rwpf *wpf = to_rwpf(subdev);
-	struct vsp1_pipeline *pipe =
-		to_vsp1_pipeline(&wpf->entity.subdev.entity);
 	struct vsp1_device *vsp1 = wpf->entity.vsp1;
 	const struct v4l2_rect *crop = &wpf->crop;
 	unsigned int i;
 	u32 srcrpf = 0;
 	u32 outfmt = 0;
+	int ret;
+
+	ret = vsp1_entity_set_streaming(&wpf->entity, enable);
+	if (ret < 0)
+		return ret;
 
 	if (!enable) {
 		vsp1_write(vsp1, VI6_WPF_IRQ_ENB(wpf->entity.index), 0);
+		vsp1_write(vsp1, wpf->entity.index * VI6_WPF_OFFSET +
+			   VI6_WPF_SRCRPF, 0);
 		return 0;
 	}
 
-	/* Sources. If the pipeline has a single input configure it as the
-	 * master layer. Otherwise configure all inputs as sub-layers and
-	 * select the virtual RPF as the master layer.
+	/* Sources. If the pipeline has a single input and BRU is not used,
+	 * configure it as the master layer. Otherwise configure all
+	 * inputs as sub-layers and select the virtual RPF as the master
+	 * layer.
 	 */
-	for (i = 0; i < pipe->num_inputs; ++i) {
+	for (i = 0; i < vsp1->info->rpf_count; ++i) {
 		struct vsp1_rwpf *input = pipe->inputs[i];
 
-		srcrpf |= pipe->num_inputs == 1
+		if (!input)
+			continue;
+
+		srcrpf |= (!pipe->bru && pipe->num_inputs == 1)
 			? VI6_WPF_SRCRPF_RPF_ACT_MST(input->entity.index)
 			: VI6_WPF_SRCRPF_RPF_ACT_SUB(input->entity.index);
 	}
 
-	if (pipe->num_inputs > 1)
+	if (pipe->bru || pipe->num_inputs > 1)
 		srcrpf |= VI6_WPF_SRCRPF_VIRACT_MST;
 
 	vsp1_wpf_write(wpf, VI6_WPF_SRCRPF, srcrpf);
 
 	/* Destination stride. */
 	if (!pipe->lif) {
-		struct v4l2_pix_format_mplane *format = &wpf->video.format;
+		struct v4l2_pix_format_mplane *format = &wpf->format;
 
 		vsp1_wpf_write(wpf, VI6_WPF_DSTM_STRIDE_Y,
 			       format->plane_fmt[0].bytesperline);
@@ -95,10 +134,12 @@ static int wpf_s_stream(struct v4l2_subdev *subdev, int enable)
 
 	/* Format */
 	if (!pipe->lif) {
-		const struct vsp1_format_info *fmtinfo = wpf->video.fmtinfo;
+		const struct vsp1_format_info *fmtinfo = wpf->fmtinfo;
 
 		outfmt = fmtinfo->hwfmt << VI6_WPF_OUTFMT_WRFMT_SHIFT;
 
+		if (fmtinfo->alpha)
+			outfmt |= VI6_WPF_OUTFMT_PXA;
 		if (fmtinfo->swap_yc)
 			outfmt |= VI6_WPF_OUTFMT_SPYCS;
 		if (fmtinfo->swap_uv)
@@ -111,12 +152,20 @@ static int wpf_s_stream(struct v4l2_subdev *subdev, int enable)
 	    wpf->entity.formats[RWPF_PAD_SOURCE].code)
 		outfmt |= VI6_WPF_OUTFMT_CSC;
 
+	/* Take the control handler lock to ensure that the PDV value won't be
+	 * changed behind our back by a set control operation.
+	 */
+	if (vsp1->info->uapi)
+		mutex_lock(wpf->ctrls.lock);
+	outfmt |= wpf->alpha->cur.val << VI6_WPF_OUTFMT_PDV_SHIFT;
 	vsp1_wpf_write(wpf, VI6_WPF_OUTFMT, outfmt);
+	if (vsp1->info->uapi)
+		mutex_unlock(wpf->ctrls.lock);
 
-	vsp1_write(vsp1, VI6_DPR_WPF_FPORCH(wpf->entity.index),
-		   VI6_DPR_WPF_FPORCH_FP_WPFN);
+	vsp1_mod_write(&wpf->entity, VI6_DPR_WPF_FPORCH(wpf->entity.index),
+		       VI6_DPR_WPF_FPORCH_FP_WPFN);
 
-	vsp1_write(vsp1, VI6_WPF_WRBCK_CTRL, 0);
+	vsp1_mod_write(&wpf->entity, VI6_WPF_WRBCK_CTRL, 0);
 
 	/* Enable interrupts */
 	vsp1_write(vsp1, VI6_WPF_IRQ_STA(wpf->entity.index), 0);
@@ -152,20 +201,17 @@ static struct v4l2_subdev_ops wpf_ops = {
  * Video Device Operations
  */
 
-static void wpf_vdev_queue(struct vsp1_video *video,
-			   struct vsp1_video_buffer *buf)
+static void wpf_set_memory(struct vsp1_rwpf *wpf, struct vsp1_rwpf_memory *mem)
 {
-	struct vsp1_rwpf *wpf = container_of(video, struct vsp1_rwpf, video);
-
-	vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_Y, buf->addr[0]);
-	if (buf->buf.num_planes > 1)
-		vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_C0, buf->addr[1]);
-	if (buf->buf.num_planes > 2)
-		vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_C1, buf->addr[2]);
+	vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_Y, mem->addr[0]);
+	if (mem->num_planes > 1)
+		vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_C0, mem->addr[1]);
+	if (mem->num_planes > 2)
+		vsp1_wpf_write(wpf, VI6_WPF_DSTM_ADDR_C1, mem->addr[2]);
 }
 
-static const struct vsp1_video_operations wpf_vdev_ops = {
-	.queue = wpf_vdev_queue,
+static const struct vsp1_rwpf_operations wpf_vdev_ops = {
+	.set_memory = wpf_set_memory,
 };
 
 /* -----------------------------------------------------------------------------
@@ -175,14 +221,14 @@ static const struct vsp1_video_operations wpf_vdev_ops = {
 struct vsp1_rwpf *vsp1_wpf_create(struct vsp1_device *vsp1, unsigned int index)
 {
 	struct v4l2_subdev *subdev;
-	struct vsp1_video *video;
 	struct vsp1_rwpf *wpf;
-	unsigned int flags;
 	int ret;
 
 	wpf = devm_kzalloc(vsp1->dev, sizeof(*wpf), GFP_KERNEL);
 	if (wpf == NULL)
 		return ERR_PTR(-ENOMEM);
+
+	wpf->ops = &wpf_vdev_ops;
 
 	wpf->max_width = WPF_MAX_WIDTH;
 	wpf->max_height = WPF_MAX_HEIGHT;
@@ -198,7 +244,7 @@ struct vsp1_rwpf *vsp1_wpf_create(struct vsp1_device *vsp1, unsigned int index)
 	subdev = &wpf->entity.subdev;
 	v4l2_subdev_init(subdev, &wpf_ops);
 
-	subdev->entity.ops = &vsp1_media_ops;
+	subdev->entity.ops = &vsp1->media_ops;
 	subdev->internal_ops = &vsp1_subdev_internal_ops;
 	snprintf(subdev->name, sizeof(subdev->name), "%s wpf.%u",
 		 dev_name(vsp1->dev), index);
@@ -207,37 +253,24 @@ struct vsp1_rwpf *vsp1_wpf_create(struct vsp1_device *vsp1, unsigned int index)
 
 	vsp1_entity_init_formats(subdev, NULL);
 
-	/* Initialize the video device. */
-	video = &wpf->video;
+	/* Initialize the control handler. */
+	v4l2_ctrl_handler_init(&wpf->ctrls, 1);
+	wpf->alpha = v4l2_ctrl_new_std(&wpf->ctrls, &wpf_ctrl_ops,
+				       V4L2_CID_ALPHA_COMPONENT,
+				       0, 255, 1, 255);
 
-	video->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	video->vsp1 = vsp1;
-	video->ops = &wpf_vdev_ops;
+	wpf->entity.subdev.ctrl_handler = &wpf->ctrls;
 
-	ret = vsp1_video_init(video, &wpf->entity);
-	if (ret < 0)
-		goto error_video;
-
-	/* Connect the video device to the WPF. All connections are immutable
-	 * except for the WPF0 source link if a LIF is present.
-	 */
-	flags = MEDIA_LNK_FL_ENABLED;
-	if (!(vsp1->pdata->features & VSP1_HAS_LIF) || index != 0)
-		flags |= MEDIA_LNK_FL_IMMUTABLE;
-
-	ret = media_entity_create_link(&wpf->entity.subdev.entity,
-				       RWPF_PAD_SOURCE,
-				       &wpf->video.video.entity, 0, flags);
-	if (ret < 0)
-		goto error_link;
-
-	wpf->entity.sink = &wpf->video.video.entity;
+	if (wpf->ctrls.error) {
+		dev_err(vsp1->dev, "wpf%u: failed to initialize controls\n",
+			index);
+		ret = wpf->ctrls.error;
+		goto error;
+	}
 
 	return wpf;
 
-error_link:
-	vsp1_video_cleanup(video);
-error_video:
-	media_entity_cleanup(&wpf->entity.subdev.entity);
+error:
+	vsp1_entity_destroy(&wpf->entity);
 	return ERR_PTR(ret);
 }

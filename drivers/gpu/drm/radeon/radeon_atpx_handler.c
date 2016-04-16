@@ -33,7 +33,6 @@ static struct radeon_atpx_priv {
 	bool atpx_detected;
 	/* handle for device - and atpx */
 	acpi_handle dhandle;
-	acpi_handle other_handle;
 	struct radeon_atpx atpx;
 } radeon_atpx_priv;
 
@@ -61,6 +60,10 @@ struct atpx_mux {
 
 bool radeon_has_atpx(void) {
 	return radeon_atpx_priv.atpx_detected;
+}
+
+bool radeon_has_atpx_dgpu_power_cntl(void) {
+	return radeon_atpx_priv.atpx.functions.power_cntl;
 }
 
 /**
@@ -142,10 +145,6 @@ static void radeon_atpx_parse_functions(struct radeon_atpx_functions *f, u32 mas
  */
 static int radeon_atpx_validate(struct radeon_atpx *atpx)
 {
-	/* make sure required functions are enabled */
-	/* dGPU power control is required */
-	atpx->functions.power_cntl = true;
-
 	if (atpx->functions.px_params) {
 		union acpi_object *info;
 		struct atpx_px_params output;
@@ -453,10 +452,9 @@ static bool radeon_atpx_pci_probe_handle(struct pci_dev *pdev)
 		return false;
 
 	status = acpi_get_handle(dhandle, "ATPX", &atpx_handle);
-	if (ACPI_FAILURE(status)) {
-		radeon_atpx_priv.other_handle = dhandle;
+	if (ACPI_FAILURE(status))
 		return false;
-	}
+
 	radeon_atpx_priv.dhandle = dhandle;
 	radeon_atpx_priv.atpx.handle = atpx_handle;
 	return true;
@@ -501,7 +499,7 @@ static int radeon_atpx_get_client_id(struct pci_dev *pdev)
 		return VGA_SWITCHEROO_DIS;
 }
 
-static struct vga_switcheroo_handler radeon_atpx_handler = {
+static const struct vga_switcheroo_handler radeon_atpx_handler = {
 	.switchto = radeon_atpx_switchto,
 	.power_state = radeon_atpx_power_state,
 	.init = radeon_atpx_init,
@@ -537,19 +535,9 @@ static bool radeon_atpx_detect(void)
 
 	if (has_atpx && vga_count == 2) {
 		acpi_get_name(radeon_atpx_priv.atpx.handle, ACPI_FULL_PATHNAME, &buffer);
-		printk(KERN_INFO "VGA switcheroo: detected switching method %s handle\n",
+		printk(KERN_INFO "vga_switcheroo: detected switching method %s handle\n",
 		       acpi_method_name);
 		radeon_atpx_priv.atpx_detected = true;
-		/*
-		 * On some systems hotplug events are generated for the device
-		 * being switched off when ATPX is executed.  They cause ACPI
-		 * hotplug to trigger and attempt to remove the device from
-		 * the system, which causes it to break down.  Prevent that from
-		 * happening by setting the no_hotplug flag for the involved
-		 * ACPI device objects.
-		 */
-		acpi_bus_no_hotplug(radeon_atpx_priv.dhandle);
-		acpi_bus_no_hotplug(radeon_atpx_priv.other_handle);
 		return true;
 	}
 	return false;
@@ -563,13 +551,14 @@ static bool radeon_atpx_detect(void)
 void radeon_register_atpx_handler(void)
 {
 	bool r;
+	enum vga_switcheroo_handler_flags_t handler_flags = 0;
 
 	/* detect if we have any ATPX + 2 VGA in the system */
 	r = radeon_atpx_detect();
 	if (!r)
 		return;
 
-	vga_switcheroo_register_handler(&radeon_atpx_handler);
+	vga_switcheroo_register_handler(&radeon_atpx_handler, handler_flags);
 }
 
 /**
