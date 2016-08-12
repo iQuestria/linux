@@ -5,6 +5,7 @@
  */
 #include <linux/errno.h>
 #include <linux/compiler.h>
+#include <linux/kasan-checks.h>
 #include <linux/thread_info.h>
 #include <linux/string.h>
 #include <asm/asm.h>
@@ -28,12 +29,12 @@
 #define USER_DS 	MAKE_MM_SEG(TASK_SIZE_MAX)
 
 #define get_ds()	(KERNEL_DS)
-#define get_fs()	(current_thread_info()->addr_limit)
-#define set_fs(x)	(current_thread_info()->addr_limit = (x))
+#define get_fs()	(current->thread.addr_limit)
+#define set_fs(x)	(current->thread.addr_limit = (x))
 
 #define segment_eq(a, b)	((a).seg == (b).seg)
 
-#define user_addr_max() (current_thread_info()->addr_limit.seg)
+#define user_addr_max() (current->thread.addr_limit.seg)
 #define __addr_ok(addr) 	\
 	((unsigned long __force)(addr) < user_addr_max())
 
@@ -108,9 +109,17 @@ struct exception_table_entry {
 
 #define ARCH_HAS_RELATIVE_EXTABLE
 
+#define swap_ex_entry_fixup(a, b, tmp, delta)			\
+	do {							\
+		(a)->fixup = (b)->fixup + (delta);		\
+		(b)->fixup = (tmp).fixup - (delta);		\
+		(a)->handler = (b)->handler + (delta);		\
+		(b)->handler = (tmp).handler - (delta);		\
+	} while (0)
+
 extern int fixup_exception(struct pt_regs *regs, int trapnr);
 extern bool ex_has_fault_handler(unsigned long ip);
-extern int early_fixup_exception(unsigned long *ip);
+extern void early_fixup_exception(struct pt_regs *regs, int trapnr);
 
 /*
  * These are the main single-value transfer routines.  They automatically
@@ -333,7 +342,26 @@ do {									\
 } while (0)
 
 #ifdef CONFIG_X86_32
-#define __get_user_asm_u64(x, ptr, retval, errret)	(x) = __get_user_bad()
+#define __get_user_asm_u64(x, ptr, retval, errret)			\
+({									\
+	__typeof__(ptr) __ptr = (ptr);					\
+	asm volatile(ASM_STAC "\n"					\
+		     "1:	movl %2,%%eax\n"			\
+		     "2:	movl %3,%%edx\n"			\
+		     "3: " ASM_CLAC "\n"				\
+		     ".section .fixup,\"ax\"\n"				\
+		     "4:	mov %4,%0\n"				\
+		     "	xorl %%eax,%%eax\n"				\
+		     "	xorl %%edx,%%edx\n"				\
+		     "	jmp 3b\n"					\
+		     ".previous\n"					\
+		     _ASM_EXTABLE(1b, 4b)				\
+		     _ASM_EXTABLE(2b, 4b)				\
+		     : "=r" (retval), "=A"(x)				\
+		     : "m" (__m(__ptr)), "m" __m(((u32 *)(__ptr)) + 1),	\
+		       "i" (errret), "0" (retval));			\
+})
+
 #define __get_user_asm_ex_u64(x, ptr)			(x) = __get_user_bad()
 #else
 #define __get_user_asm_u64(x, ptr, retval, errret) \
@@ -420,7 +448,7 @@ do {									\
 #define __get_user_nocheck(x, ptr, size)				\
 ({									\
 	int __gu_err;							\
-	unsigned long __gu_val;						\
+	__inttype(*(ptr)) __gu_val;					\
 	__uaccess_begin();						\
 	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
 	__uaccess_end();						\
@@ -459,13 +487,13 @@ struct __large_struct { unsigned long buf[100]; };
  * uaccess_try and catch
  */
 #define uaccess_try	do {						\
-	current_thread_info()->uaccess_err = 0;				\
+	current->thread.uaccess_err = 0;				\
 	__uaccess_begin();						\
 	barrier();
 
 #define uaccess_catch(err)						\
 	__uaccess_end();						\
-	(err) |= (current_thread_info()->uaccess_err ? -EFAULT : 0);	\
+	(err) |= (current->thread.uaccess_err ? -EFAULT : 0);		\
 } while (0)
 
 /**
@@ -713,6 +741,8 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 
 	might_fault();
 
+	kasan_check_write(to, n);
+
 	/*
 	 * While we would like to have the compiler do the checking for us
 	 * even in the non-constant size case, any false positives there are
@@ -731,9 +761,10 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 	 * case, and do only runtime checking for non-constant sizes.
 	 */
 
-	if (likely(sz < 0 || sz >= n))
+	if (likely(sz < 0 || sz >= n)) {
+		check_object_size(to, n, false);
 		n = _copy_from_user(to, from, n);
-	else if(__builtin_constant_p(n))
+	} else if (__builtin_constant_p(n))
 		copy_from_user_overflow();
 	else
 		__copy_from_user_overflow(sz, n);
@@ -746,12 +777,15 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	int sz = __compiletime_object_size(from);
 
+	kasan_check_read(from, n);
+
 	might_fault();
 
 	/* See the comment in copy_from_user() above. */
-	if (likely(sz < 0 || sz >= n))
+	if (likely(sz < 0 || sz >= n)) {
+		check_object_size(from, n, true);
 		n = _copy_to_user(to, from, n);
-	else if(__builtin_constant_p(n))
+	} else if (__builtin_constant_p(n))
 		copy_to_user_overflow();
 	else
 		__copy_to_user_overflow(sz, n);
@@ -780,21 +814,21 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 #define user_access_begin()	__uaccess_begin()
 #define user_access_end()	__uaccess_end()
 
-#define unsafe_put_user(x, ptr)						\
-({										\
+#define unsafe_put_user(x, ptr, err_label)					\
+do {										\
 	int __pu_err;								\
 	__put_user_size((x), (ptr), sizeof(*(ptr)), __pu_err, -EFAULT);		\
-	__builtin_expect(__pu_err, 0);						\
-})
+	if (unlikely(__pu_err)) goto err_label;					\
+} while (0)
 
-#define unsafe_get_user(x, ptr)						\
-({										\
+#define unsafe_get_user(x, ptr, err_label)					\
+do {										\
 	int __gu_err;								\
 	unsigned long __gu_val;							\
 	__get_user_size(__gu_val, (ptr), sizeof(*(ptr)), __gu_err, -EFAULT);	\
 	(x) = (__force __typeof__(*(ptr)))__gu_val;				\
-	__builtin_expect(__gu_err, 0);						\
-})
+	if (unlikely(__gu_err)) goto err_label;					\
+} while (0)
 
 #endif /* _ASM_X86_UACCESS_H */
 

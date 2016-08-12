@@ -82,6 +82,8 @@ void pci_pm_init(struct pci_dev *dev);
 void pci_ea_init(struct pci_dev *dev);
 void pci_allocate_cap_save_buffers(struct pci_dev *dev);
 void pci_free_cap_save_buffers(struct pci_dev *dev);
+void pci_bridge_d3_device_changed(struct pci_dev *dev);
+void pci_bridge_d3_device_removed(struct pci_dev *dev);
 
 static inline void pci_wakeup_event(struct pci_dev *dev)
 {
@@ -94,9 +96,19 @@ static inline bool pci_has_subordinate(struct pci_dev *pci_dev)
 	return !!(pci_dev->subordinate);
 }
 
+static inline bool pci_power_manageable(struct pci_dev *pci_dev)
+{
+	/*
+	 * Currently we allow normal PCI devices and PCI bridges transition
+	 * into D3 if their bridge_d3 is set.
+	 */
+	return !pci_has_subordinate(pci_dev) || pci_dev->bridge_d3;
+}
+
 struct pci_vpd_ops {
 	ssize_t (*read)(struct pci_dev *dev, loff_t pos, size_t count, void *buf);
 	ssize_t (*write)(struct pci_dev *dev, loff_t pos, size_t count, const void *buf);
+	int (*set_size)(struct pci_dev *dev, size_t len);
 };
 
 struct pci_vpd {

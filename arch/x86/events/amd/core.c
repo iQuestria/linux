@@ -115,7 +115,7 @@ static __initconst const u64 amd_hw_cache_event_ids
 /*
  * AMD Performance Monitor K7 and later.
  */
-static const u64 amd_perfmon_event_map[] =
+static const u64 amd_perfmon_event_map[PERF_COUNT_HW_MAX] =
 {
   [PERF_COUNT_HW_CPU_CYCLES]			= 0x0076,
   [PERF_COUNT_HW_INSTRUCTIONS]			= 0x00c0,
@@ -370,13 +370,13 @@ static int amd_pmu_cpu_prepare(int cpu)
 	WARN_ON_ONCE(cpuc->amd_nb);
 
 	if (!x86_pmu.amd_nb_constraints)
-		return NOTIFY_OK;
+		return 0;
 
 	cpuc->amd_nb = amd_alloc_nb(cpu);
 	if (!cpuc->amd_nb)
-		return NOTIFY_BAD;
+		return -ENOMEM;
 
-	return NOTIFY_OK;
+	return 0;
 }
 
 static void amd_pmu_cpu_starting(int cpu)

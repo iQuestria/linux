@@ -43,7 +43,7 @@
 
 #include <linux/init.h>
 #include <linux/smp.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sched.h>
 #include <linux/percpu.h>
 #include <linux/bootmem.h>
@@ -104,6 +104,9 @@ static unsigned long *logical_package_map  __read_mostly;
 static unsigned int max_physical_pkg_id __read_mostly;
 unsigned int __max_logical_packages __read_mostly;
 EXPORT_SYMBOL(__max_logical_packages);
+
+/* Maximum number of SMT threads on any online core */
+int __max_smt_threads __read_mostly;
 
 static inline void smpboot_setup_warm_reset_vector(unsigned long start_eip)
 {
@@ -332,6 +335,11 @@ static void __init smp_init_package_map(void)
 	 * primary cores.
 	 */
 	ncpus = boot_cpu_data.x86_max_cores;
+	if (!ncpus) {
+		pr_warn("x86_max_cores == zero !?!?");
+		ncpus = 1;
+	}
+
 	__max_logical_packages = DIV_ROUND_UP(total_cpus, ncpus);
 
 	/*
@@ -488,7 +496,7 @@ void set_cpu_sibling_map(int cpu)
 	bool has_mp = has_smt || boot_cpu_data.x86_max_cores > 1;
 	struct cpuinfo_x86 *c = &cpu_data(cpu);
 	struct cpuinfo_x86 *o;
-	int i;
+	int i, threads;
 
 	cpumask_set_cpu(cpu, cpu_sibling_setup_mask);
 
@@ -545,6 +553,10 @@ void set_cpu_sibling_map(int cpu)
 		if (match_die(c, o) && !topology_same_node(c, o))
 			primarily_use_numa_for_topology();
 	}
+
+	threads = cpumask_weight(topology_sibling_cpumask(cpu));
+	if (threads > __max_smt_threads)
+		__max_smt_threads = threads;
 }
 
 /* maps the cpu to the sched domain representing multi-core */
@@ -1231,7 +1243,7 @@ static int __init smp_sanity_check(unsigned max_cpus)
 	 * If we couldn't find a local APIC, then get out of here now!
 	 */
 	if (APIC_INTEGRATED(apic_version[boot_cpu_physical_apicid]) &&
-	    !cpu_has_apic) {
+	    !boot_cpu_has(X86_FEATURE_APIC)) {
 		if (!disable_apic) {
 			pr_err("BIOS bug, local APIC #%d not detected!...\n",
 				boot_cpu_physical_apicid);
@@ -1280,7 +1292,6 @@ void __init native_smp_prepare_cpus(unsigned int max_cpus)
 	cpumask_copy(cpu_callin_mask, cpumask_of(0));
 	mb();
 
-	current_thread_info()->cpu = 0;  /* needed? */
 	for_each_possible_cpu(i) {
 		zalloc_cpumask_var(&per_cpu(cpu_sibling_map, i), GFP_KERNEL);
 		zalloc_cpumask_var(&per_cpu(cpu_core_map, i), GFP_KERNEL);
@@ -1436,6 +1447,21 @@ __init void prefill_possible_map(void)
 
 #ifdef CONFIG_HOTPLUG_CPU
 
+/* Recompute SMT state for all CPUs on offline */
+static void recompute_smt_state(void)
+{
+	int max_threads, cpu;
+
+	max_threads = 0;
+	for_each_online_cpu (cpu) {
+		int threads = cpumask_weight(topology_sibling_cpumask(cpu));
+
+		if (threads > max_threads)
+			max_threads = threads;
+	}
+	__max_smt_threads = max_threads;
+}
+
 static void remove_siblinginfo(int cpu)
 {
 	int sibling;
@@ -1460,6 +1486,7 @@ static void remove_siblinginfo(int cpu)
 	c->phys_proc_id = 0;
 	c->cpu_core_id = 0;
 	cpumask_clear_cpu(cpu, cpu_sibling_setup_mask);
+	recompute_smt_state();
 }
 
 static void remove_cpu_from_maps(int cpu)
@@ -1617,7 +1644,7 @@ static inline void mwait_play_dead(void)
 	}
 }
 
-static inline void hlt_play_dead(void)
+void hlt_play_dead(void)
 {
 	if (__this_cpu_read(cpu_info.x86) >= 4)
 		wbinvd();

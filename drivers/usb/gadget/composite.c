@@ -66,19 +66,35 @@ function_descriptors(struct usb_function *f,
 {
 	struct usb_descriptor_header **descriptors;
 
+	/*
+	 * NOTE: we try to help gadget drivers which might not be setting
+	 * max_speed appropriately.
+	 */
+
 	switch (speed) {
 	case USB_SPEED_SUPER_PLUS:
 		descriptors = f->ssp_descriptors;
-		break;
+		if (descriptors)
+			break;
+		/* FALLTHROUGH */
 	case USB_SPEED_SUPER:
 		descriptors = f->ss_descriptors;
-		break;
+		if (descriptors)
+			break;
+		/* FALLTHROUGH */
 	case USB_SPEED_HIGH:
 		descriptors = f->hs_descriptors;
-		break;
+		if (descriptors)
+			break;
+		/* FALLTHROUGH */
 	default:
 		descriptors = f->fs_descriptors;
 	}
+
+	/*
+	 * if we can't find any descriptors at all, then this gadget deserves to
+	 * Oops with a NULL pointer dereference
+	 */
 
 	return descriptors;
 }
@@ -651,6 +667,8 @@ static int bos_desc(struct usb_composite_dev *cdev)
 		ssp_cap->bLength = USB_DT_USB_SSP_CAP_SIZE(1);
 		ssp_cap->bDescriptorType = USB_DT_DEVICE_CAPABILITY;
 		ssp_cap->bDevCapabilityType = USB_SSP_CAP_TYPE;
+		ssp_cap->bReserved = 0;
+		ssp_cap->wReserved = 0;
 
 		/* SSAC = 1 (2 attributes) */
 		ssp_cap->bmAttributes = cpu_to_le32(1);
@@ -1850,14 +1868,19 @@ unknown:
 				}
 				break;
 			}
-			req->length = value;
-			req->context = cdev;
-			req->zero = value < w_length;
-			value = composite_ep0_queue(cdev, req, GFP_ATOMIC);
-			if (value < 0) {
-				DBG(cdev, "ep_queue --> %d\n", value);
-				req->status = 0;
-				composite_setup_complete(gadget->ep0, req);
+
+			if (value >= 0) {
+				req->length = value;
+				req->context = cdev;
+				req->zero = value < w_length;
+				value = composite_ep0_queue(cdev, req,
+							    GFP_ATOMIC);
+				if (value < 0) {
+					DBG(cdev, "ep_queue --> %d\n", value);
+					req->status = 0;
+					composite_setup_complete(gadget->ep0,
+								 req);
+				}
 			}
 			return value;
 		}
