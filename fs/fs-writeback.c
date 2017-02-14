@@ -1769,15 +1769,13 @@ static long wb_writeback(struct bdi_writeback *wb,
 		 * become available for writeback. Otherwise
 		 * we'll just busyloop.
 		 */
-		if (!list_empty(&wb->b_more_io))  {
-			trace_writeback_wait(wb, work);
-			inode = wb_inode(wb->b_more_io.prev);
-			spin_lock(&inode->i_lock);
-			spin_unlock(&wb->list_lock);
-			/* This function drops i_lock... */
-			inode_sleep_on_writeback(inode);
-			spin_lock(&wb->list_lock);
-		}
+		trace_writeback_wait(wb, work);
+		inode = wb_inode(wb->b_more_io.prev);
+		spin_lock(&inode->i_lock);
+		spin_unlock(&wb->list_lock);
+		/* This function drops i_lock... */
+		inode_sleep_on_writeback(inode);
+		spin_lock(&wb->list_lock);
 	}
 	spin_unlock(&wb->list_lock);
 	blk_finish_plug(&plug);
@@ -1948,6 +1946,12 @@ void wb_workfn(struct work_struct *work)
 void wakeup_flusher_threads(long nr_pages, enum wb_reason reason)
 {
 	struct backing_dev_info *bdi;
+
+	/*
+	 * If we are expecting writeback progress we must submit plugged IO.
+	 */
+	if (blk_needs_flush_plug(current))
+		blk_schedule_flush_plug(current);
 
 	if (!nr_pages)
 		nr_pages = get_nr_dirty_pages();
