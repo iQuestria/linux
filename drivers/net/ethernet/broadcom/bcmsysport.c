@@ -449,6 +449,10 @@ static void bcm_sysport_get_stats(struct net_device *dev,
 			p = (char *)&dev->stats;
 		else
 			p = (char *)priv;
+
+		if (priv->is_lite && !bcm_sysport_lite_stat_valid(s->type))
+			continue;
+
 		p += s->stat_offset;
 		data[j] = *(unsigned long *)p;
 		j++;
@@ -1099,7 +1103,7 @@ static struct sk_buff *bcm_sysport_insert_tsb(struct sk_buff *skb,
 		skb = nskb;
 	}
 
-	tsb = (struct bcm_tsb *)skb_push(skb, sizeof(*tsb));
+	tsb = skb_push(skb, sizeof(*tsb));
 	/* Zero-out TSB by default */
 	memset(tsb, 0, sizeof(*tsb));
 
@@ -2026,9 +2030,12 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 	priv->num_rx_desc_words = params->num_rx_desc_words;
 
 	priv->irq0 = platform_get_irq(pdev, 0);
-	if (!priv->is_lite)
+	if (!priv->is_lite) {
 		priv->irq1 = platform_get_irq(pdev, 1);
-	priv->wol_irq = platform_get_irq(pdev, 2);
+		priv->wol_irq = platform_get_irq(pdev, 2);
+	} else {
+		priv->wol_irq = platform_get_irq(pdev, 1);
+	}
 	if (priv->irq0 <= 0 || (priv->irq1 <= 0 && !priv->is_lite)) {
 		dev_err(&pdev->dev, "invalid interrupts\n");
 		ret = -EINVAL;
