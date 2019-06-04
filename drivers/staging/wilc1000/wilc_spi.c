@@ -120,7 +120,7 @@ static int wilc_bus_probe(struct spi_device *spi)
 			dev_err(&spi->dev, "failed to get the irq gpio\n");
 	}
 
-	ret = wilc_netdev_init(&wilc, NULL, WILC_HIF_SPI, &wilc_hif_spi);
+	ret = wilc_netdev_init(&wilc, NULL, HIF_SPI, &wilc_hif_spi);
 	if (ret) {
 		kfree(spi_priv);
 		return ret;
@@ -814,7 +814,7 @@ static int wilc_spi_read(struct wilc *wilc, u32 addr, u8 *buf, u32 size)
  *
  ********************************************/
 
-static int wilc_spi_deinit(struct wilc *wilc)
+static int _wilc_spi_deinit(struct wilc *wilc)
 {
 	/*
 	 * TODO:
@@ -927,15 +927,16 @@ static int wilc_spi_read_int(struct wilc *wilc, u32 *int_status)
 	int ret;
 	u32 tmp;
 	u32 byte_cnt;
-	bool unexpected_irq;
-	int j;
+	int happened, j;
 	u32 unknown_mask;
 	u32 irq_flags;
 	int k = IRG_FLAGS_OFFSET + 5;
 
-	if (spi_priv->has_thrpt_enh)
-		return spi_internal_read(wilc, 0xe840 - WILC_SPI_REG_BASE,
-					 int_status);
+	if (spi_priv->has_thrpt_enh) {
+		ret = spi_internal_read(wilc, 0xe840 - WILC_SPI_REG_BASE,
+					int_status);
+		return ret;
+	}
 	ret = wilc_spi_read_reg(wilc, WILC_VMM_TO_HOST_SIZE, &byte_cnt);
 	if (!ret) {
 		dev_err(&spi->dev,
@@ -946,6 +947,8 @@ static int wilc_spi_read_int(struct wilc *wilc, u32 *int_status)
 
 	j = 0;
 	do {
+		happened = 0;
+
 		wilc_spi_read_reg(wilc, 0x1a90, &irq_flags);
 		tmp |= ((irq_flags >> 27) << IRG_FLAGS_OFFSET);
 
@@ -956,15 +959,15 @@ static int wilc_spi_read_int(struct wilc *wilc, u32 *int_status)
 
 		unknown_mask = ~((1ul << spi_priv->nint) - 1);
 
-		unexpected_irq = (tmp >> IRG_FLAGS_OFFSET) & unknown_mask;
-		if (unexpected_irq) {
+		if ((tmp >> IRG_FLAGS_OFFSET) & unknown_mask) {
 			dev_err(&spi->dev,
 				"Unexpected interrupt(2):j=%d,tmp=%x,mask=%x\n",
 				j, tmp, unknown_mask);
+				happened = 1;
 		}
 
 		j++;
-	} while (unexpected_irq);
+	} while (happened);
 
 	*int_status = tmp;
 
@@ -980,8 +983,9 @@ static int wilc_spi_clear_int_ext(struct wilc *wilc, u32 val)
 	u32 tbl_ctl;
 
 	if (spi_priv->has_thrpt_enh) {
-		return spi_internal_write(wilc, 0xe844 - WILC_SPI_REG_BASE,
-					  val);
+		ret = spi_internal_write(wilc, 0xe844 - WILC_SPI_REG_BASE,
+					 val);
+		return ret;
 	}
 
 	flags = val & (BIT(MAX_NUM_INT) - 1);
@@ -1119,7 +1123,7 @@ static int wilc_spi_sync_ext(struct wilc *wilc, int nint)
 /* Global spi HIF function table */
 static const struct wilc_hif_func wilc_hif_spi = {
 	.hif_init = wilc_spi_init,
-	.hif_deinit = wilc_spi_deinit,
+	.hif_deinit = _wilc_spi_deinit,
 	.hif_read_reg = wilc_spi_read_reg,
 	.hif_write_reg = wilc_spi_write_reg,
 	.hif_block_rx = wilc_spi_read,

@@ -284,7 +284,7 @@ static int pvr2_enumaudio(struct file *file, void *priv, struct v4l2_audio *vin)
 
 	if (vin->index > 0)
 		return -EINVAL;
-	strscpy(vin->name, "PVRUSB2 Audio", sizeof(vin->name));
+	strncpy(vin->name, "PVRUSB2 Audio", 14);
 	vin->capability = V4L2_AUDCAP_STEREO;
 	return 0;
 }
@@ -293,7 +293,7 @@ static int pvr2_g_audio(struct file *file, void *priv, struct v4l2_audio *vin)
 {
 	/* pkt: FIXME: see above comment (VIDIOC_ENUMAUDIO) */
 	vin->index = 0;
-	strscpy(vin->name, "PVRUSB2 Audio", sizeof(vin->name));
+	strncpy(vin->name, "PVRUSB2 Audio", 14);
 	vin->capability = V4L2_AUDCAP_STEREO;
 	return 0;
 }
@@ -703,19 +703,16 @@ static int pvr2_try_ext_ctrls(struct file *file, void *priv,
 	return 0;
 }
 
-static int pvr2_g_pixelaspect(struct file *file, void *priv,
-			      int type, struct v4l2_fract *f)
+static int pvr2_cropcap(struct file *file, void *priv, struct v4l2_cropcap *cap)
 {
 	struct pvr2_v4l2_fh *fh = file->private_data;
 	struct pvr2_hdw *hdw = fh->channel.mc_head->hdw;
-	struct v4l2_cropcap cap = { .type = type };
 	int ret;
 
-	if (type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
-	ret = pvr2_hdw_get_cropcap(hdw, &cap);
-	if (!ret)
-		*f = cap.pixelaspect;
+	ret = pvr2_hdw_get_cropcap(hdw, cap);
+	cap->type = V4L2_BUF_TYPE_VIDEO_CAPTURE; /* paranoia */
 	return ret;
 }
 
@@ -818,7 +815,7 @@ static const struct v4l2_ioctl_ops pvr2_ioctl_ops = {
 	.vidioc_g_audio			    = pvr2_g_audio,
 	.vidioc_enumaudio		    = pvr2_enumaudio,
 	.vidioc_enum_input		    = pvr2_enum_input,
-	.vidioc_g_pixelaspect		    = pvr2_g_pixelaspect,
+	.vidioc_cropcap			    = pvr2_cropcap,
 	.vidioc_s_selection		    = pvr2_s_selection,
 	.vidioc_g_selection		    = pvr2_g_selection,
 	.vidioc_g_input			    = pvr2_g_input,

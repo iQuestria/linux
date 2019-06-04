@@ -1,11 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Modifications by Christian Pellegrin <chripell@evolware.org>
-//
-// s3c24xx_uda134x.c - S3C24XX_UDA134X ALSA SoC Audio board driver
-//
-// Copyright 2007 Dension Audio Systems Ltd.
-// Author: Zoltan Devai
+/*
+ * Modifications by Christian Pellegrin <chripell@evolware.org>
+ *
+ * s3c24xx_uda134x.c  --  S3C24XX_UDA134X ALSA SoC Audio board driver
+ *
+ * Copyright 2007 Dension Audio Systems Ltd.
+ * Author: Zoltan Devai
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
 
 #include <linux/clk.h>
 #include <linux/gpio.h>

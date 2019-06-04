@@ -75,49 +75,20 @@ static irqreturn_t ec_irq_thread(int irq, void *data)
 
 static int cros_ec_sleep_event(struct cros_ec_device *ec_dev, u8 sleep_event)
 {
-	int ret;
 	struct {
 		struct cros_ec_command msg;
-		union {
-			struct ec_params_host_sleep_event req0;
-			struct ec_params_host_sleep_event_v1 req1;
-			struct ec_response_host_sleep_event_v1 resp1;
-		} u;
+		struct ec_params_host_sleep_event req;
 	} __packed buf;
 
 	memset(&buf, 0, sizeof(buf));
 
-	if (ec_dev->host_sleep_v1) {
-		buf.u.req1.sleep_event = sleep_event;
-		buf.u.req1.suspend_params.sleep_timeout_ms =
-				EC_HOST_SLEEP_TIMEOUT_DEFAULT;
-
-		buf.msg.outsize = sizeof(buf.u.req1);
-		if ((sleep_event == HOST_SLEEP_EVENT_S3_RESUME) ||
-		    (sleep_event == HOST_SLEEP_EVENT_S0IX_RESUME))
-			buf.msg.insize = sizeof(buf.u.resp1);
-
-		buf.msg.version = 1;
-
-	} else {
-		buf.u.req0.sleep_event = sleep_event;
-		buf.msg.outsize = sizeof(buf.u.req0);
-	}
+	buf.req.sleep_event = sleep_event;
 
 	buf.msg.command = EC_CMD_HOST_SLEEP_EVENT;
+	buf.msg.version = 0;
+	buf.msg.outsize = sizeof(buf.req);
 
-	ret = cros_ec_cmd_xfer(ec_dev, &buf.msg);
-
-	/* For now, report failure to transition to S0ix with a warning. */
-	if (ret >= 0 && ec_dev->host_sleep_v1 &&
-	    (sleep_event == HOST_SLEEP_EVENT_S0IX_RESUME))
-		WARN_ONCE(buf.u.resp1.resume_response.sleep_transitions &
-			  EC_HOST_RESUME_SLEEP_TIMEOUT,
-			  "EC detected sleep transition timeout. Total slp_s0 transitions: %d",
-			  buf.u.resp1.resume_response.sleep_transitions &
-			  EC_HOST_RESUME_SLEEP_TRANSITIONS_MASK);
-
-	return ret;
+	return cros_ec_cmd_xfer(ec_dev, &buf.msg);
 }
 
 int cros_ec_register(struct cros_ec_device *ec_dev)
@@ -158,8 +129,8 @@ int cros_ec_register(struct cros_ec_device *ec_dev)
 		}
 	}
 
-	err = devm_mfd_add_devices(ec_dev->dev, PLATFORM_DEVID_AUTO, &ec_cell,
-				   1, NULL, ec_dev->irq, NULL);
+	err = mfd_add_devices(ec_dev->dev, PLATFORM_DEVID_AUTO, &ec_cell, 1,
+			      NULL, ec_dev->irq, NULL);
 	if (err) {
 		dev_err(dev,
 			"Failed to register Embedded Controller subdevice %d\n",
@@ -176,7 +147,7 @@ int cros_ec_register(struct cros_ec_device *ec_dev)
 		 * - the EC is responsive at init time (it is not true for a
 		 *   sensor hub.
 		 */
-		err = devm_mfd_add_devices(ec_dev->dev, PLATFORM_DEVID_AUTO,
+		err = mfd_add_devices(ec_dev->dev, PLATFORM_DEVID_AUTO,
 				      &ec_pd_cell, 1, NULL, ec_dev->irq, NULL);
 		if (err) {
 			dev_err(dev,
@@ -209,6 +180,14 @@ int cros_ec_register(struct cros_ec_device *ec_dev)
 	return 0;
 }
 EXPORT_SYMBOL(cros_ec_register);
+
+int cros_ec_remove(struct cros_ec_device *ec_dev)
+{
+	mfd_remove_devices(ec_dev->dev);
+
+	return 0;
+}
+EXPORT_SYMBOL(cros_ec_remove);
 
 #ifdef CONFIG_PM_SLEEP
 int cros_ec_suspend(struct cros_ec_device *ec_dev)

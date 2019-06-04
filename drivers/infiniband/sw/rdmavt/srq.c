@@ -48,7 +48,6 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <rdma/uverbs_ioctl.h>
 
 #include "srq.h"
 #include "vt.h"
@@ -71,24 +70,29 @@ void rvt_driver_srq_init(struct rvt_dev_info *rdi)
  * @srq_init_attr: the attributes of the SRQ
  * @udata: data from libibverbs when creating a user SRQ
  *
- * Return: 0 on success
+ * Return: Allocated srq object
  */
-int rvt_create_srq(struct ib_srq *ibsrq, struct ib_srq_init_attr *srq_init_attr,
-		   struct ib_udata *udata)
+struct ib_srq *rvt_create_srq(struct ib_pd *ibpd,
+			      struct ib_srq_init_attr *srq_init_attr,
+			      struct ib_udata *udata)
 {
-	struct rvt_dev_info *dev = ib_to_rvt(ibsrq->device);
-	struct rvt_srq *srq = ibsrq_to_rvtsrq(ibsrq);
+	struct rvt_dev_info *dev = ib_to_rvt(ibpd->device);
+	struct rvt_srq *srq;
 	u32 sz;
-	int ret;
+	struct ib_srq *ret;
 
 	if (srq_init_attr->srq_type != IB_SRQT_BASIC)
-		return -EOPNOTSUPP;
+		return ERR_PTR(-EOPNOTSUPP);
 
 	if (srq_init_attr->attr.max_sge == 0 ||
 	    srq_init_attr->attr.max_sge > dev->dparms.props.max_srq_sge ||
 	    srq_init_attr->attr.max_wr == 0 ||
 	    srq_init_attr->attr.max_wr > dev->dparms.props.max_srq_wr)
-		return -EINVAL;
+		return ERR_PTR(-EINVAL);
+
+	srq = kzalloc_node(sizeof(*srq), GFP_KERNEL, dev->dparms.node);
+	if (!srq)
+		return ERR_PTR(-ENOMEM);
 
 	/*
 	 * Need to use vmalloc() if we want to support large #s of entries.
@@ -102,7 +106,7 @@ int rvt_create_srq(struct ib_srq *ibsrq, struct ib_srq_init_attr *srq_init_attr,
 		vzalloc_node(sizeof(struct rvt_rwq) + srq->rq.size * sz,
 			     dev->dparms.node);
 	if (!srq->rq.wq) {
-		ret = -ENOMEM;
+		ret = ERR_PTR(-ENOMEM);
 		goto bail_srq;
 	}
 
@@ -111,18 +115,23 @@ int rvt_create_srq(struct ib_srq *ibsrq, struct ib_srq_init_attr *srq_init_attr,
 	 * See rvt_mmap() for details.
 	 */
 	if (udata && udata->outlen >= sizeof(__u64)) {
+		int err;
 		u32 s = sizeof(struct rvt_rwq) + srq->rq.size * sz;
 
-		srq->ip = rvt_create_mmap_info(dev, s, udata, srq->rq.wq);
+		srq->ip =
+		    rvt_create_mmap_info(dev, s, ibpd->uobject->context,
+					 srq->rq.wq);
 		if (!srq->ip) {
-			ret = -ENOMEM;
+			ret = ERR_PTR(-ENOMEM);
 			goto bail_wq;
 		}
 
-		ret = ib_copy_to_udata(udata, &srq->ip->offset,
+		err = ib_copy_to_udata(udata, &srq->ip->offset,
 				       sizeof(srq->ip->offset));
-		if (ret)
+		if (err) {
+			ret = ERR_PTR(err);
 			goto bail_ip;
+		}
 	}
 
 	/*
@@ -134,7 +143,7 @@ int rvt_create_srq(struct ib_srq *ibsrq, struct ib_srq_init_attr *srq_init_attr,
 	spin_lock(&dev->n_srqs_lock);
 	if (dev->n_srqs_allocated == dev->dparms.props.max_srq) {
 		spin_unlock(&dev->n_srqs_lock);
-		ret = -ENOMEM;
+		ret = ERR_PTR(-ENOMEM);
 		goto bail_ip;
 	}
 
@@ -147,13 +156,14 @@ int rvt_create_srq(struct ib_srq *ibsrq, struct ib_srq_init_attr *srq_init_attr,
 		spin_unlock_irq(&dev->pending_lock);
 	}
 
-	return 0;
+	return &srq->ibsrq;
 
 bail_ip:
 	kfree(srq->ip);
 bail_wq:
 	vfree(srq->rq.wq);
 bail_srq:
+	kfree(srq);
 	return ret;
 }
 
@@ -325,8 +335,9 @@ int rvt_query_srq(struct ib_srq *ibsrq, struct ib_srq_attr *attr)
  * rvt_destroy_srq - destory an srq
  * @ibsrq: srq object to destroy
  *
+ * Return always 0
  */
-void rvt_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
+int rvt_destroy_srq(struct ib_srq *ibsrq)
 {
 	struct rvt_srq *srq = ibsrq_to_rvtsrq(ibsrq);
 	struct rvt_dev_info *dev = ib_to_rvt(ibsrq->device);
@@ -338,4 +349,7 @@ void rvt_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
 		kref_put(&srq->ip->ref, rvt_release_mmap_info);
 	else
 		vfree(srq->rq.wq);
+	kfree(srq);
+
+	return 0;
 }

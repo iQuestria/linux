@@ -166,7 +166,8 @@ static int nx_sha512_update(struct shash_desc *desc, const u8 *data,
 			goto out;
 		}
 
-		rc = nx_hcall_sync(nx_ctx, &nx_ctx->op, 0);
+		rc = nx_hcall_sync(nx_ctx, &nx_ctx->op,
+				   desc->flags & CRYPTO_TFM_REQ_MAY_SLEEP);
 		if (rc)
 			goto out;
 
@@ -248,7 +249,8 @@ static int nx_sha512_final(struct shash_desc *desc, u8 *out)
 		goto out;
 	}
 
-	rc = nx_hcall_sync(nx_ctx, &nx_ctx->op, 0);
+	rc = nx_hcall_sync(nx_ctx, &nx_ctx->op,
+			   desc->flags & CRYPTO_TFM_REQ_MAY_SLEEP);
 	if (rc)
 		goto out;
 

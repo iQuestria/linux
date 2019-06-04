@@ -320,7 +320,8 @@ AES_ENTRY(aes_ctr_encrypt)
 
 .Lctrtailblock:
 	st1		{v0.16b}, [x0]
-	b		.Lctrout
+	ldp		x29, x30, [sp], #16
+	ret
 
 .Lctrcarry:
 	umov		x7, v4.d[0]		/* load upper word of ctr  */

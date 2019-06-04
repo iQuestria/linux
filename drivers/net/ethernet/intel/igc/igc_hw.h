@@ -55,7 +55,6 @@ enum igc_media_type {
 
 enum igc_nvm_type {
 	igc_nvm_unknown = 0,
-	igc_nvm_eeprom_spi,
 	igc_nvm_flash_hw,
 	igc_nvm_invm,
 };

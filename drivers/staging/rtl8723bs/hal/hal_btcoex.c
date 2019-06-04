@@ -75,7 +75,7 @@ static BTCDBGINFO GLBtcDbgInfo;
 
 static void DBG_BT_INFO_INIT(PBTCDBGINFO pinfo, u8 *pbuf, u32 size)
 {
-	if (!pinfo)
+	if (NULL == pinfo)
 		return;
 
 	memset(pinfo, 0, sizeof(BTCDBGINFO));
@@ -95,7 +95,7 @@ void DBG_BT_INFO(u8 *dbgmsg)
 
 	pinfo = &GLBtcDbgInfo;
 
-	if (!pinfo->info)
+	if (NULL == pinfo->info)
 		return;
 
 	msglen = strlen(dbgmsg);
@@ -112,7 +112,8 @@ void DBG_BT_INFO(u8 *dbgmsg)
 /*  */
 static u8 halbtcoutsrc_IsBtCoexistAvailable(PBTC_COEXIST pBtCoexist)
 {
-	if (!pBtCoexist->bBinded || !pBtCoexist->Adapter){
+	if (!pBtCoexist->bBinded ||
+		NULL == pBtCoexist->Adapter){
 		return false;
 	}
 	return true;
@@ -258,7 +259,7 @@ static void halbtcoutsrc_AggregationCheck(PBTC_COEXIST pBtCoexist)
 
 	if (pBtCoexist->btInfo.bRejectAggPkt)
 		rtw_btcoex_RejectApAggregatedPacket(padapter, true);
-	else {
+	else{
 
 		if (pBtCoexist->btInfo.bPreBtCtrlAggBufSize !=
 			pBtCoexist->btInfo.bBtCtrlAggBufSize){
@@ -1208,7 +1209,7 @@ void EXhalbtcoutsrc_SpecialPacketNotify(PBTC_COEXIST pBtCoexist, u8 pktType)
 		packetType = BTC_PACKET_EAPOL;
 	else if (PACKET_ARP == pktType)
 		packetType = BTC_PACKET_ARP;
-	else {
+	else{
 		packetType = BTC_PACKET_UNKNOWN;
 		return;
 	}
@@ -1570,7 +1571,7 @@ void hal_btcoex_SetDBG(struct adapter *padapter, u32 *pDbgModule)
 	u32 i;
 
 
-	if (!pDbgModule)
+	if (NULL == pDbgModule)
 		return;
 
 	for (i = 0; i < BTC_MSG_MAX; i++)
@@ -1584,7 +1585,7 @@ u32 hal_btcoex_GetDBG(struct adapter *padapter, u8 *pStrBuf, u32 bufSize)
 	u32 leftSize;
 
 
-	if (!pStrBuf || bufSize == 0)
+	if ((NULL == pStrBuf) || (0 == bufSize))
 		return 0;
 
 	pstr = pStrBuf;

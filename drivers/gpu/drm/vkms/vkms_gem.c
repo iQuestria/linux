@@ -1,4 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ */
 
 #include <linux/shmem_fs.h>
 
@@ -111,8 +117,11 @@ struct drm_gem_object *vkms_gem_create(struct drm_device *dev,
 
 	ret = drm_gem_handle_create(file, &obj->gem, handle);
 	drm_gem_object_put_unlocked(&obj->gem);
-	if (ret)
+	if (ret) {
+		drm_gem_object_release(&obj->gem);
+		kfree(obj);
 		return ERR_PTR(ret);
+	}
 
 	return &obj->gem;
 }
@@ -142,6 +151,32 @@ int vkms_dumb_create(struct drm_file *file, struct drm_device *dev,
 	DRM_DEBUG_DRIVER("Created object of size %lld\n", size);
 
 	return 0;
+}
+
+int vkms_dumb_map(struct drm_file *file, struct drm_device *dev,
+		  u32 handle, u64 *offset)
+{
+	struct drm_gem_object *obj;
+	int ret;
+
+	obj = drm_gem_object_lookup(file, handle);
+	if (!obj)
+		return -ENOENT;
+
+	if (!obj->filp) {
+		ret = -EINVAL;
+		goto unref;
+	}
+
+	ret = drm_gem_create_mmap_offset(obj);
+	if (ret)
+		goto unref;
+
+	*offset = drm_vma_node_offset_addr(&obj->vma_node);
+unref:
+	drm_gem_object_put_unlocked(obj);
+
+	return ret;
 }
 
 static struct page **_get_pages(struct vkms_gem_object *vkms_obj)

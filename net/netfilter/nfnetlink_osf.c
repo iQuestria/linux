@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -67,7 +66,6 @@ static bool nf_osf_match_one(const struct sk_buff *skb,
 			     int ttl_check,
 			     struct nf_osf_hdr_ctx *ctx)
 {
-	const __u8 *optpinit = ctx->optp;
 	unsigned int check_WSS = 0;
 	int fmatch = FMATCH_WRONG;
 	int foptsize, optnum;
@@ -156,9 +154,6 @@ static bool nf_osf_match_one(const struct sk_buff *skb,
 			break;
 		}
 	}
-
-	if (fmatch != FMATCH_OK)
-		ctx->optp = optpinit;
 
 	return fmatch == FMATCH_OK;
 }
@@ -256,9 +251,9 @@ nf_osf_match(const struct sk_buff *skb, u_int8_t family,
 }
 EXPORT_SYMBOL_GPL(nf_osf_match);
 
-bool nf_osf_find(const struct sk_buff *skb,
-		 const struct list_head *nf_osf_fingers,
-		 const int ttl_check, struct nf_osf_data *data)
+const char *nf_osf_find(const struct sk_buff *skb,
+			const struct list_head *nf_osf_fingers,
+			const int ttl_check)
 {
 	const struct iphdr *ip = ip_hdr(skb);
 	const struct nf_osf_user_finger *f;
@@ -266,24 +261,24 @@ bool nf_osf_find(const struct sk_buff *skb,
 	const struct nf_osf_finger *kf;
 	struct nf_osf_hdr_ctx ctx;
 	const struct tcphdr *tcp;
+	const char *genre = NULL;
 
 	memset(&ctx, 0, sizeof(ctx));
 
 	tcp = nf_osf_hdr_ctx_init(&ctx, skb, ip, opts);
 	if (!tcp)
-		return false;
+		return NULL;
 
 	list_for_each_entry_rcu(kf, &nf_osf_fingers[ctx.df], finger_entry) {
 		f = &kf->finger;
 		if (!nf_osf_match_one(skb, f, ttl_check, &ctx))
 			continue;
 
-		data->genre = f->genre;
-		data->version = f->version;
+		genre = f->genre;
 		break;
 	}
 
-	return true;
+	return genre;
 }
 EXPORT_SYMBOL_GPL(nf_osf_find);
 

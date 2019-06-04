@@ -1,11 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * A driver for the CMOS camera controller in the Marvell 88ALP01 "cafe"
  * multifunction chip.  Currently works with the Omnivision OV7670
  * sensor.
  *
  * The data sheet for this device can be found at:
- *    http://wiki.laptop.org/images/5/5c/88ALP01_Datasheet_July_2007.pdf
+ *    http://www.marvell.com/products/pc_connectivity/88alp01/
  *
  * Copyright 2006-11 One Laptop Per Child Association, Inc.
  * Copyright 2006-11 Jonathan Corbet <corbet@lwn.net>
@@ -14,6 +13,9 @@
  *
  * v4l2_device/v4l2_subdev conversion by:
  * Copyright (C) 2009 Hans Verkuil <hverkuil@xs4all.nl>
+ *
+ * This file may be distributed under the terms of the GNU General
+ * Public License, version 2.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>

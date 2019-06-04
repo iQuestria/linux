@@ -55,11 +55,6 @@ BOOTAFLAGS	:= -D__ASSEMBLY__ $(BOOTCFLAGS) -traditional -nostdinc
 
 BOOTARFLAGS	:= -cr$(KBUILD_ARFLAGS)
 
-ifdef CONFIG_CC_IS_CLANG
-BOOTCFLAGS += $(CLANG_FLAGS)
-BOOTAFLAGS += $(CLANG_FLAGS)
-endif
-
 ifdef CONFIG_DEBUG_INFO
 BOOTCFLAGS	+= -g
 endif
@@ -202,7 +197,7 @@ $(obj)/empty.c:
 $(obj)/zImage.coff.lds $(obj)/zImage.ps3.lds : $(obj)/%: $(srctree)/$(src)/%.S
 	$(Q)cp $< $@
 
-$(srctree)/$(src)/serial.c: $(obj)/autoconf.h
+$(obj)/serial.c: $(obj)/autoconf.h
 
 $(obj)/autoconf.h: $(obj)/%: $(objtree)/include/generated/%
 	$(Q)cp $< $@
@@ -218,7 +213,7 @@ quiet_cmd_bootas = BOOTAS  $@
       cmd_bootas = $(BOOTCC) -Wp,-MD,$(depfile) $(BOOTAFLAGS) -c -o $@ $<
 
 quiet_cmd_bootar = BOOTAR  $@
-      cmd_bootar = $(BOOTAR) $(BOOTARFLAGS) $@.$$$$ $(real-prereqs); mv $@.$$$$ $@
+      cmd_bootar = $(BOOTAR) $(BOOTARFLAGS) $@.$$$$ $(filter-out FORCE,$^); mv $@.$$$$ $@
 
 $(obj-libfdt): $(obj)/%.o: $(srctree)/scripts/dtc/libfdt/%.c FORCE
 	$(call if_changed_dep,bootcc)

@@ -56,9 +56,8 @@
 #define INTERRUPT_INTERVAL	16
 #define QUEUE_LENGTH		48
 
-#define IR_HEADER_SIZE		8	// For header and timestamp.
+#define IN_PACKET_HEADER_SIZE	4
 #define OUT_PACKET_HEADER_SIZE	0
-#define HEADER_TSTAMP_MASK	0x0000ffff
 
 static void pcm_period_tasklet(unsigned long data);
 
@@ -457,7 +456,7 @@ static inline int queue_out_packet(struct amdtp_stream *s,
 
 static inline int queue_in_packet(struct amdtp_stream *s)
 {
-	return queue_packet(s, IR_HEADER_SIZE, s->max_payload_length);
+	return queue_packet(s, IN_PACKET_HEADER_SIZE, s->max_payload_length);
 }
 
 static int handle_out_packet(struct amdtp_stream *s,
@@ -655,17 +654,15 @@ end:
 }
 
 static int handle_in_packet_without_header(struct amdtp_stream *s,
-			unsigned int payload_length, unsigned int cycle,
+			unsigned int payload_quadlets, unsigned int cycle,
 			unsigned int index)
 {
 	__be32 *buffer;
-	unsigned int payload_quadlets;
 	unsigned int data_blocks;
 	struct snd_pcm_substream *pcm;
 	unsigned int pcm_frames;
 
 	buffer = s->buffer.packets[s->packet_index].buffer;
-	payload_quadlets = payload_length / 4;
 	data_blocks = payload_quadlets / s->data_block_quadlets;
 
 	trace_in_packet_without_header(s, cycle, payload_quadlets, data_blocks,
@@ -700,6 +697,13 @@ static inline u32 increment_cycle_count(u32 cycle, unsigned int addend)
 	if (cycle >= 8 * CYCLES_PER_SECOND)
 		cycle -= 8 * CYCLES_PER_SECOND;
 	return cycle;
+}
+
+static inline u32 decrement_cycle_count(u32 cycle, unsigned int subtrahend)
+{
+	if (cycle < subtrahend)
+		cycle += 8 * CYCLES_PER_SECOND;
+	return cycle - subtrahend;
 }
 
 static void out_stream_callback(struct fw_iso_context *context, u32 tstamp,
@@ -739,26 +743,29 @@ static void in_stream_callback(struct fw_iso_context *context, u32 tstamp,
 	struct amdtp_stream *s = private_data;
 	unsigned int i, packets;
 	unsigned int payload_length, max_payload_length;
-	__be32 *ctx_header = header;
+	__be32 *headers = header;
+	u32 cycle;
 
 	if (s->packet_index < 0)
 		return;
 
 	/* The number of packets in buffer */
-	packets = header_length / IR_HEADER_SIZE;
+	packets = header_length / IN_PACKET_HEADER_SIZE;
+
+	cycle = compute_cycle_count(tstamp);
+
+	/* Align to actual cycle count for the last packet. */
+	cycle = decrement_cycle_count(cycle, packets);
 
 	/* For buffer-over-run prevention. */
 	max_payload_length = s->max_payload_length;
 
 	for (i = 0; i < packets; i++) {
-		u32 iso_header = be32_to_cpu(ctx_header[0]);
-		unsigned int cycle;
-
-		tstamp = be32_to_cpu(ctx_header[1]) & HEADER_TSTAMP_MASK;
-		cycle = compute_cycle_count(tstamp);
+		cycle = increment_cycle_count(cycle, 1);
 
 		/* The number of bytes in this packet */
-		payload_length = iso_header >> ISO_DATA_LENGTH_SHIFT;
+		payload_length =
+			(be32_to_cpu(headers[i]) >> ISO_DATA_LENGTH_SHIFT);
 		if (payload_length > max_payload_length) {
 			dev_err(&s->unit->device,
 				"Detect jumbo payload: %04x %04x\n",
@@ -768,8 +775,6 @@ static void in_stream_callback(struct fw_iso_context *context, u32 tstamp,
 
 		if (s->handle_packet(s, payload_length, cycle, i) < 0)
 			break;
-
-		ctx_header += IR_HEADER_SIZE / sizeof(__be32);
 	}
 
 	/* Queueing error or detecting invalid payload. */
@@ -790,7 +795,6 @@ static void amdtp_stream_first_callback(struct fw_iso_context *context,
 					void *header, void *private_data)
 {
 	struct amdtp_stream *s = private_data;
-	__be32 *ctx_header = header;
 	u32 cycle;
 	unsigned int packets;
 
@@ -801,10 +805,11 @@ static void amdtp_stream_first_callback(struct fw_iso_context *context,
 	s->callbacked = true;
 	wake_up(&s->callback_wait);
 
-	if (s->direction == AMDTP_IN_STREAM) {
-		tstamp = be32_to_cpu(ctx_header[1]) & HEADER_TSTAMP_MASK;
-		cycle = compute_cycle_count(tstamp);
+	cycle = compute_cycle_count(tstamp);
 
+	if (s->direction == AMDTP_IN_STREAM) {
+		packets = header_length / IN_PACKET_HEADER_SIZE;
+		cycle = decrement_cycle_count(cycle, packets);
 		context->callback.sc = in_stream_callback;
 		if (s->flags & CIP_NO_HEADER)
 			s->handle_packet = handle_in_packet_without_header;
@@ -812,7 +817,6 @@ static void amdtp_stream_first_callback(struct fw_iso_context *context,
 			s->handle_packet = handle_in_packet;
 	} else {
 		packets = header_length / 4;
-		cycle = compute_cycle_count(tstamp);
 		cycle = increment_cycle_count(cycle, QUEUE_LENGTH - packets);
 		context->callback.sc = out_stream_callback;
 		if (s->flags & CIP_NO_HEADER)
@@ -874,7 +878,7 @@ int amdtp_stream_start(struct amdtp_stream *s, int channel, int speed)
 	if (s->direction == AMDTP_IN_STREAM) {
 		dir = DMA_FROM_DEVICE;
 		type = FW_ISO_CONTEXT_RECEIVE;
-		header_size = IR_HEADER_SIZE;
+		header_size = IN_PACKET_HEADER_SIZE;
 	} else {
 		dir = DMA_TO_DEVICE;
 		type = FW_ISO_CONTEXT_TRANSMIT;

@@ -17,6 +17,12 @@
 
 #define THREAD_SIZE		(1 << THREAD_SHIFT)
 
+#ifdef CONFIG_PPC64
+#define CURRENT_THREAD_INFO(dest, sp)	stringify_in_c(clrrdi dest, sp, THREAD_SHIFT)
+#else
+#define CURRENT_THREAD_INFO(dest, sp)	stringify_in_c(rlwinm dest, sp, 0, 0, 31-THREAD_SHIFT)
+#endif
+
 #ifndef __ASSEMBLY__
 #include <linux/cache.h>
 #include <asm/processor.h>
@@ -28,6 +34,8 @@
  * low level task data.
  */
 struct thread_info {
+	struct task_struct *task;		/* main task structure */
+	int		cpu;			/* cpu we're on */
 	int		preempt_count;		/* 0 => preemptable,
 						   <0 => BUG */
 	unsigned long	local_flags;		/* private flags for thread */
@@ -50,6 +58,8 @@ struct thread_info {
  */
 #define INIT_THREAD_INFO(tsk)			\
 {						\
+	.task =		&tsk,			\
+	.cpu =		0,			\
 	.preempt_count = INIT_PREEMPT_COUNT,	\
 	.flags =	0,			\
 }
@@ -57,6 +67,15 @@ struct thread_info {
 #define THREAD_SIZE_ORDER	(THREAD_SHIFT - PAGE_SHIFT)
 
 /* how to get the thread information struct from C */
+static inline struct thread_info *current_thread_info(void)
+{
+	unsigned long val;
+
+	asm (CURRENT_THREAD_INFO(%0,1) : "=r" (val));
+
+	return (struct thread_info *)val;
+}
+
 extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
 
 #ifdef CONFIG_PPC_BOOK3S_64

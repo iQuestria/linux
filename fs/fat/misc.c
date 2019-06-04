@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/fs/fat/misc.c
  *
@@ -65,7 +64,7 @@ int fat_clusters_flush(struct super_block *sb)
 	struct buffer_head *bh;
 	struct fat_boot_fsinfo *fsinfo;
 
-	if (!is_fat32(sbi))
+	if (sbi->fat_bits != 32)
 		return 0;
 
 	bh = sb_bread(sb, sbi->fsinfo_sector);

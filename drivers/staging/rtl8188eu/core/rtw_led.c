@@ -33,7 +33,7 @@ void BlinkWorkItemCallback(struct work_struct *work)
 	struct LED_871x *pLed = container_of(work, struct LED_871x,
 						BlinkWorkItem);
 
-	blink_handler(pLed);
+	BlinkHandler(pLed);
 }
 
 /*  */
@@ -94,17 +94,17 @@ static void SwLedBlink1(struct LED_871x *pLed)
 
 	/*  Change LED according to BlinkingLedState specified. */
 	if (pLed->BlinkingLedState == RTW_LED_ON) {
-		sw_led_on(padapter, pLed);
+		SwLedOn(padapter, pLed);
 		RT_TRACE(_module_rtl8712_led_c_, _drv_info_,
 			 ("Blinktimes (%d): turn on\n", pLed->BlinkTimes));
 	} else {
-		sw_led_off(padapter, pLed);
+		SwLedOff(padapter, pLed);
 		RT_TRACE(_module_rtl8712_led_c_, _drv_info_,
 			 ("Blinktimes (%d): turn off\n", pLed->BlinkTimes));
 	}
 
 	if (padapter->pwrctrlpriv.rf_pwrstate != rf_on) {
-		sw_led_off(padapter, pLed);
+		SwLedOff(padapter, pLed);
 		ResetLedStatus(pLed);
 		return;
 	}
@@ -240,7 +240,7 @@ static void SwLedBlink1(struct LED_871x *pLed)
 static void SwLedControlMode1(struct adapter *padapter, enum LED_CTL_MODE LedAction)
 {
 	struct led_priv *ledpriv = &padapter->ledpriv;
-	struct LED_871x *pLed = &ledpriv->sw_led;
+	struct LED_871x *pLed = &ledpriv->SwLed0;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 
 	switch (LedAction) {
@@ -445,7 +445,7 @@ static void SwLedControlMode1(struct adapter *padapter, enum LED_CTL_MODE LedAct
 			del_timer_sync(&pLed->BlinkTimer);
 			pLed->bLedScanBlinkInProgress = false;
 		}
-		sw_led_off(padapter, pLed);
+		SwLedOff(padapter, pLed);
 		break;
 	default:
 		break;
@@ -455,7 +455,11 @@ static void SwLedControlMode1(struct adapter *padapter, enum LED_CTL_MODE LedAct
 		 ("Led %d\n", pLed->CurrLedState));
 }
 
-void blink_handler(struct LED_871x *pLed)
+/*  */
+/*	Description: */
+/*		Handler function of LED Blinking. */
+/*  */
+void BlinkHandler(struct LED_871x *pLed)
 {
 	struct adapter *padapter = pLed->padapter;
 
@@ -465,7 +469,7 @@ void blink_handler(struct LED_871x *pLed)
 	SwLedBlink1(pLed);
 }
 
-void led_control_8188eu(struct adapter *padapter, enum LED_CTL_MODE LedAction)
+void LedControl8188eu(struct adapter *padapter, enum LED_CTL_MODE LedAction)
 {
 	if (padapter->bSurpriseRemoved || padapter->bDriverStopped ||
 	    !padapter->hw_init_completed)

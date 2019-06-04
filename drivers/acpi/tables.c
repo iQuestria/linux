@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  acpi_tables.c - ACPI Boot-Time Table Parsing
  *
  *  Copyright (C) 2001 Paul Diefenbaugh <paul.s.diefenbaugh@intel.com>
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
  */
 
 /* Uncomment next line to get verbose printout */
@@ -34,16 +48,6 @@ static char *mps_inti_flags_trigger[] = { "dfl", "edge", "res", "level" };
 static struct acpi_table_desc initial_tables[ACPI_MAX_TABLES] __initdata;
 
 static int acpi_apic_instance __initdata;
-
-enum acpi_subtable_type {
-	ACPI_SUBTABLE_COMMON,
-	ACPI_SUBTABLE_HMAT,
-};
-
-struct acpi_subtable_entry {
-	union acpi_subtable_headers *hdr;
-	enum acpi_subtable_type type;
-};
 
 /*
  * Disable table checksum verification for the early stage due to the size
@@ -213,50 +217,6 @@ void acpi_table_print_madt_entry(struct acpi_subtable_header *header)
 	}
 }
 
-static unsigned long __init
-acpi_get_entry_type(struct acpi_subtable_entry *entry)
-{
-	switch (entry->type) {
-	case ACPI_SUBTABLE_COMMON:
-		return entry->hdr->common.type;
-	case ACPI_SUBTABLE_HMAT:
-		return entry->hdr->hmat.type;
-	}
-	return 0;
-}
-
-static unsigned long __init
-acpi_get_entry_length(struct acpi_subtable_entry *entry)
-{
-	switch (entry->type) {
-	case ACPI_SUBTABLE_COMMON:
-		return entry->hdr->common.length;
-	case ACPI_SUBTABLE_HMAT:
-		return entry->hdr->hmat.length;
-	}
-	return 0;
-}
-
-static unsigned long __init
-acpi_get_subtable_header_length(struct acpi_subtable_entry *entry)
-{
-	switch (entry->type) {
-	case ACPI_SUBTABLE_COMMON:
-		return sizeof(entry->hdr->common);
-	case ACPI_SUBTABLE_HMAT:
-		return sizeof(entry->hdr->hmat);
-	}
-	return 0;
-}
-
-static enum acpi_subtable_type __init
-acpi_get_subtable_type(char *id)
-{
-	if (strncmp(id, ACPI_SIG_HMAT, 4) == 0)
-		return ACPI_SUBTABLE_HMAT;
-	return ACPI_SUBTABLE_COMMON;
-}
-
 /**
  * acpi_parse_entries_array - for each proc_num find a suitable subtable
  *
@@ -280,13 +240,14 @@ acpi_get_subtable_type(char *id)
  * On success returns sum of all matching entries for all proc handlers.
  * Otherwise, -ENODEV or -EINVAL is returned.
  */
-static int __init acpi_parse_entries_array(char *id, unsigned long table_size,
+static int __init
+acpi_parse_entries_array(char *id, unsigned long table_size,
 		struct acpi_table_header *table_header,
 		struct acpi_subtable_proc *proc, int proc_num,
 		unsigned int max_entries)
 {
-	struct acpi_subtable_entry entry;
-	unsigned long table_end, subtable_len, entry_len;
+	struct acpi_subtable_header *entry;
+	unsigned long table_end;
 	int count = 0;
 	int errs = 0;
 	int i;
@@ -309,20 +270,19 @@ static int __init acpi_parse_entries_array(char *id, unsigned long table_size,
 
 	/* Parse all entries looking for a match. */
 
-	entry.type = acpi_get_subtable_type(id);
-	entry.hdr = (union acpi_subtable_headers *)
+	entry = (struct acpi_subtable_header *)
 	    ((unsigned long)table_header + table_size);
-	subtable_len = acpi_get_subtable_header_length(&entry);
 
-	while (((unsigned long)entry.hdr) + subtable_len  < table_end) {
+	while (((unsigned long)entry) + sizeof(struct acpi_subtable_header) <
+	       table_end) {
 		if (max_entries && count >= max_entries)
 			break;
 
 		for (i = 0; i < proc_num; i++) {
-			if (acpi_get_entry_type(&entry) != proc[i].id)
+			if (entry->type != proc[i].id)
 				continue;
 			if (!proc[i].handler ||
-			     (!errs && proc[i].handler(entry.hdr, table_end))) {
+			     (!errs && proc[i].handler(entry, table_end))) {
 				errs++;
 				continue;
 			}
@@ -337,14 +297,13 @@ static int __init acpi_parse_entries_array(char *id, unsigned long table_size,
 		 * If entry->length is 0, break from this loop to avoid
 		 * infinite loop.
 		 */
-		entry_len = acpi_get_entry_length(&entry);
-		if (entry_len == 0) {
+		if (entry->length == 0) {
 			pr_err("[%4.4s:0x%02x] Invalid zero length\n", id, proc->id);
 			return -EINVAL;
 		}
 
-		entry.hdr = (union acpi_subtable_headers *)
-		    ((unsigned long)entry.hdr + entry_len);
+		entry = (struct acpi_subtable_header *)
+		    ((unsigned long)entry + entry->length);
 	}
 
 	if (max_entries && count > max_entries) {
@@ -355,7 +314,8 @@ static int __init acpi_parse_entries_array(char *id, unsigned long table_size,
 	return errs ? -EINVAL : count;
 }
 
-int __init acpi_table_parse_entries_array(char *id,
+int __init
+acpi_table_parse_entries_array(char *id,
 			 unsigned long table_size,
 			 struct acpi_subtable_proc *proc, int proc_num,
 			 unsigned int max_entries)
@@ -386,7 +346,8 @@ int __init acpi_table_parse_entries_array(char *id,
 	return count;
 }
 
-int __init acpi_table_parse_entries(char *id,
+int __init
+acpi_table_parse_entries(char *id,
 			unsigned long table_size,
 			int entry_id,
 			acpi_tbl_entry_handler handler,
@@ -401,7 +362,8 @@ int __init acpi_table_parse_entries(char *id,
 						max_entries);
 }
 
-int __init acpi_table_parse_madt(enum acpi_madt_type id,
+int __init
+acpi_table_parse_madt(enum acpi_madt_type id,
 		      acpi_tbl_entry_handler handler, unsigned int max_entries)
 {
 	return acpi_table_parse_entries(ACPI_SIG_MADT,
@@ -511,21 +473,13 @@ static DECLARE_BITMAP(acpi_initrd_installed, NR_ACPI_INITRD_TABLES);
 
 void __init acpi_table_upgrade(void)
 {
-	void *data;
-	size_t size;
+	void *data = (void *)initrd_start;
+	size_t size = initrd_end - initrd_start;
 	int sig, no, table_nr = 0, total_offset = 0;
 	long offset = 0;
 	struct acpi_table_header *table;
 	char cpio_path[32] = "kernel/firmware/acpi/";
 	struct cpio_data file;
-
-	if (IS_ENABLED(CONFIG_ACPI_TABLE_OVERRIDE_VIA_BUILTIN_INITRD)) {
-		data = __initramfs_start;
-		size = __initramfs_size;
-	} else {
-		data = (void *)initrd_start;
-		size = initrd_end - initrd_start;
-	}
 
 	if (data == NULL || size == 0)
 		return;
@@ -708,8 +662,8 @@ static void __init acpi_table_initrd_scan(void)
 		table_length = table->length;
 
 		/* Skip RSDT/XSDT which should only be used for override */
-		if (ACPI_COMPARE_NAMESEG(table->signature, ACPI_SIG_RSDT) ||
-		    ACPI_COMPARE_NAMESEG(table->signature, ACPI_SIG_XSDT)) {
+		if (ACPI_COMPARE_NAME(table->signature, ACPI_SIG_RSDT) ||
+		    ACPI_COMPARE_NAME(table->signature, ACPI_SIG_XSDT)) {
 			acpi_os_unmap_memory(table, ACPI_HEADER_SIZE);
 			goto next_table;
 		}
@@ -758,12 +712,8 @@ acpi_os_physical_table_override(struct acpi_table_header *existing_table,
 					  table_length);
 }
 
-#ifdef CONFIG_ACPI_CUSTOM_DSDT
-static void *amlcode __attribute__ ((weakref("AmlCode")));
-static void *dsdt_amlcode __attribute__ ((weakref("dsdt_aml_code")));
-#endif
-
-acpi_status acpi_os_table_override(struct acpi_table_header *existing_table,
+acpi_status
+acpi_os_table_override(struct acpi_table_header *existing_table,
 		       struct acpi_table_header **new_table)
 {
 	if (!existing_table || !new_table)
@@ -772,11 +722,8 @@ acpi_status acpi_os_table_override(struct acpi_table_header *existing_table,
 	*new_table = NULL;
 
 #ifdef CONFIG_ACPI_CUSTOM_DSDT
-	if (!strncmp(existing_table->signature, "DSDT", 4)) {
-		*new_table = (struct acpi_table_header *)&amlcode;
-		if (!(*new_table))
-			*new_table = (struct acpi_table_header *)&dsdt_amlcode;
-	}
+	if (strncmp(existing_table->signature, "DSDT", 4) == 0)
+		*new_table = (struct acpi_table_header *)AmlCode;
 #endif
 	if (*new_table != NULL)
 		acpi_table_taint(existing_table);
@@ -825,6 +772,7 @@ static int __init acpi_parse_apic_instance(char *str)
 
 	return 0;
 }
+
 early_param("acpi_apic_instance", acpi_parse_apic_instance);
 
 static int __init acpi_force_table_verification_setup(char *s)
@@ -833,6 +781,7 @@ static int __init acpi_force_table_verification_setup(char *s)
 
 	return 0;
 }
+
 early_param("acpi_force_table_verification", acpi_force_table_verification_setup);
 
 static int __init acpi_force_32bit_fadt_addr(char *s)
@@ -842,4 +791,5 @@ static int __init acpi_force_32bit_fadt_addr(char *s)
 
 	return 0;
 }
+
 early_param("acpi_force_32bit_fadt_addr", acpi_force_32bit_fadt_addr);

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 obj-$(CONFIG_VIDEO_DM365_VPFE) += davinci-vfpe.o
 
 davinci-vfpe-objs := \
@@ -7,5 +6,5 @@ davinci-vfpe-objs := \
 
 # Allow building it with COMPILE_TEST on other archs
 ifndef CONFIG_ARCH_DAVINCI
-ccflags-y += -I $(srctree)/arch/arm/mach-davinci/include/
+ccflags-y += -Iarch/arm/mach-davinci/include/
 endif

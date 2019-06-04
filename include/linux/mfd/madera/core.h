@@ -15,7 +15,6 @@
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/mfd/madera/pdata.h>
-#include <linux/mutex.h>
 #include <linux/notifier.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -37,8 +36,6 @@ enum madera_type {
 #define CS47L90_NUM_GPIOS		38
 
 #define MADERA_MAX_MICBIAS		4
-
-#define MADERA_MAX_HP_OUTPUT		3
 
 /* Notifier events */
 #define MADERA_NOTIFY_VOICE_TRIGGER	0x1
@@ -186,10 +183,6 @@ struct madera {
 	unsigned int num_childbias[MADERA_MAX_MICBIAS];
 
 	struct snd_soc_dapm_context *dapm;
-	struct mutex dapm_ptr_lock;
-	unsigned int hp_ena;
-	bool out_clamp[MADERA_MAX_HP_OUTPUT];
-	bool out_shorted[MADERA_MAX_HP_OUTPUT];
 
 	struct blocking_notifier_head notifier;
 };

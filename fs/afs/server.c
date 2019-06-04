@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* AFS server record management
  *
  * Copyright (C) 2002, 2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/sched.h>
@@ -222,6 +226,7 @@ static struct afs_server *afs_alloc_server(struct afs_net *net,
 	RCU_INIT_POINTER(server->addresses, alist);
 	server->addr_version = alist->version;
 	server->uuid = *uuid;
+	server->flags = (1UL << AFS_SERVER_FL_NEW);
 	server->update_at = ktime_get_real_seconds() + afs_server_update_delay;
 	rwlock_init(&server->fs_lock);
 	INIT_HLIST_HEAD(&server->cb_volumes);
@@ -517,15 +522,8 @@ static noinline bool afs_update_server_record(struct afs_fs_cursor *fc, struct a
 	alist = afs_vl_lookup_addrs(fc->vnode->volume->cell, fc->key,
 				    &server->uuid);
 	if (IS_ERR(alist)) {
-		if ((PTR_ERR(alist) == -ERESTARTSYS ||
-		     PTR_ERR(alist) == -EINTR) &&
-		    !(fc->flags & AFS_FS_CURSOR_INTR) &&
-		    server->addresses) {
-			_leave(" = t [intr]");
-			return true;
-		}
-		fc->error = PTR_ERR(alist);
-		_leave(" = f [%d]", fc->error);
+		fc->ac.error = PTR_ERR(alist);
+		_leave(" = f [%d]", fc->ac.error);
 		return false;
 	}
 
@@ -577,11 +575,7 @@ retry:
 	ret = wait_on_bit(&server->flags, AFS_SERVER_FL_UPDATING,
 			  TASK_INTERRUPTIBLE);
 	if (ret == -ERESTARTSYS) {
-		if (!(fc->flags & AFS_FS_CURSOR_INTR) && server->addresses) {
-			_leave(" = t [intr]");
-			return true;
-		}
-		fc->error = ret;
+		fc->ac.error = ret;
 		_leave(" = f [intr]");
 		return false;
 	}

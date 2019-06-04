@@ -103,7 +103,7 @@ int main(int argc, char **argv)
 		goto err;
 
 	cg_fd = create_and_get_cgroup(cg_path);
-	if (cg_fd < 0)
+	if (!cg_fd)
 		goto err;
 
 	if (join_cgroup(cg_path))

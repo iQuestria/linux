@@ -44,7 +44,7 @@
 #include <net/sock.h>
 #include <net/ip.h>
 #include <net/udp_tunnel.h>
-#include <net/ipv6_stubs.h>
+#include <net/addrconf.h>
 #include <linux/tipc_netlink.h>
 #include "core.h"
 #include "addr.h"
@@ -245,8 +245,10 @@ static int tipc_udp_send_msg(struct net *net, struct sk_buff *skb,
 		}
 
 		err = tipc_udp_xmit(net, _skb, ub, src, &rcast->addr);
-		if (err)
+		if (err) {
+			kfree_skb(_skb);
 			goto out;
+		}
 	}
 	err = 0;
 out:
@@ -354,21 +356,25 @@ static int tipc_udp_recv(struct sock *sk, struct sk_buff *skb)
 	skb_pull(skb, sizeof(struct udphdr));
 	hdr = buf_msg(skb);
 
-	b = rcu_dereference(ub->bearer);
+	rcu_read_lock();
+	b = rcu_dereference_rtnl(ub->bearer);
 	if (!b)
-		goto out;
+		goto rcu_out;
 
 	if (b && test_bit(0, &b->up)) {
 		tipc_rcv(sock_net(sk), skb, b);
+		rcu_read_unlock();
 		return 0;
 	}
 
 	if (unlikely(msg_user(hdr) == LINK_CONFIG)) {
 		err = tipc_udp_rcast_disc(b, skb);
 		if (err)
-			goto out;
+			goto rcu_out;
 	}
 
+rcu_out:
+	rcu_read_unlock();
 out:
 	kfree_skb(skb);
 	return 0;
@@ -447,9 +453,9 @@ int tipc_udp_nl_dump_remoteip(struct sk_buff *skb, struct netlink_callback *cb)
 		if (!attrs[TIPC_NLA_BEARER])
 			return -EINVAL;
 
-		err = nla_parse_nested_deprecated(battrs, TIPC_NLA_BEARER_MAX,
-						  attrs[TIPC_NLA_BEARER],
-						  tipc_nl_bearer_policy, NULL);
+		err = nla_parse_nested(battrs, TIPC_NLA_BEARER_MAX,
+				       attrs[TIPC_NLA_BEARER],
+				       tipc_nl_bearer_policy, NULL);
 		if (err)
 			return err;
 
@@ -523,7 +529,7 @@ int tipc_udp_nl_add_bearer_data(struct tipc_nl_msg *msg, struct tipc_bearer *b)
 	if (!ub)
 		return -ENODEV;
 
-	nest = nla_nest_start_noflag(msg->skb, TIPC_NLA_BEARER_UDP_OPTS);
+	nest = nla_nest_start(msg->skb, TIPC_NLA_BEARER_UDP_OPTS);
 	if (!nest)
 		goto msg_full;
 
@@ -601,7 +607,8 @@ int tipc_udp_nl_bearer_add(struct tipc_bearer *b, struct nlattr *attr)
 	struct nlattr *opts[TIPC_NLA_UDP_MAX + 1];
 	struct udp_media_addr *dst;
 
-	if (nla_parse_nested_deprecated(opts, TIPC_NLA_UDP_MAX, attr, tipc_nl_udp_policy, NULL))
+	if (nla_parse_nested(opts, TIPC_NLA_UDP_MAX, attr,
+			     tipc_nl_udp_policy, NULL))
 		return -EINVAL;
 
 	if (!opts[TIPC_NLA_UDP_REMOTE])
@@ -654,7 +661,9 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 	if (!attrs[TIPC_NLA_BEARER_UDP_OPTS])
 		goto err;
 
-	if (nla_parse_nested_deprecated(opts, TIPC_NLA_UDP_MAX, attrs[TIPC_NLA_BEARER_UDP_OPTS], tipc_nl_udp_policy, NULL))
+	if (nla_parse_nested(opts, TIPC_NLA_UDP_MAX,
+			     attrs[TIPC_NLA_BEARER_UDP_OPTS],
+			     tipc_nl_udp_policy, NULL))
 		goto err;
 
 	if (!opts[TIPC_NLA_UDP_LOCAL] || !opts[TIPC_NLA_UDP_REMOTE]) {
@@ -671,11 +680,6 @@ static int tipc_udp_enable(struct net *net, struct tipc_bearer *b,
 	err = tipc_parse_udp_addr(opts[TIPC_NLA_UDP_REMOTE], &remote, NULL);
 	if (err)
 		goto err;
-
-	if (remote.proto != local.proto) {
-		err = -EINVAL;
-		goto err;
-	}
 
 	/* Checking remote ip address */
 	rmcast = tipc_udp_is_mcast_addr(&remote);

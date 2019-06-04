@@ -1459,7 +1459,8 @@ static void sba_receive_message(struct mbox_client *cl, void *msg)
 
 static int sba_debugfs_stats_show(struct seq_file *file, void *offset)
 {
-	struct sba_device *sba = dev_get_drvdata(file->private);
+	struct platform_device *pdev = to_platform_device(file->private);
+	struct sba_device *sba = platform_get_drvdata(pdev);
 
 	/* Write stats in file */
 	sba_write_stats_in_seqfile(sba, file);

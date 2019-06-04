@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* AFS Cache Manager Service
  *
  * Copyright (C) 2002 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -30,7 +34,7 @@ static void SRXAFSCB_TellMeAboutYourself(struct work_struct *);
 static int afs_deliver_yfs_cb_callback(struct afs_call *);
 
 #define CM_NAME(name) \
-	char afs_SRXCB##name##_name[] __tracepoint_string =	\
+	const char afs_SRXCB##name##_name[] __tracepoint_string =	\
 		"CB." #name
 
 /*
@@ -209,7 +213,7 @@ static int afs_find_cm_server_by_peer(struct afs_call *call)
 		return 0;
 	}
 
-	call->server = server;
+	call->cm_server = server;
 	return afs_record_cm_probe(call, server);
 }
 
@@ -230,7 +234,7 @@ static int afs_find_cm_server_by_uuid(struct afs_call *call,
 		return 0;
 	}
 
-	call->server = server;
+	call->cm_server = server;
 	return afs_record_cm_probe(call, server);
 }
 
@@ -256,8 +260,8 @@ static void SRXAFSCB_CallBack(struct work_struct *work)
 	 * server holds up change visibility till it receives our reply so as
 	 * to maintain cache coherency.
 	 */
-	if (call->server)
-		afs_break_callbacks(call->server, call->count, call->request);
+	if (call->cm_server)
+		afs_break_callbacks(call->cm_server, call->count, call->request);
 
 	afs_send_empty_reply(call);
 	afs_put_call(call);
@@ -281,7 +285,6 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 		call->unmarshall++;
 
 		/* extract the FID array and its count in two steps */
-		/* fall through */
 	case 1:
 		_debug("extract FID count");
 		ret = afs_extract_data(call, true);
@@ -301,7 +304,6 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 		afs_extract_to_buf(call, call->count * 3 * 4);
 		call->unmarshall++;
 
-		/* Fall through */
 	case 2:
 		_debug("extract FID array");
 		ret = afs_extract_data(call, true);
@@ -327,7 +329,6 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 		call->unmarshall++;
 
 		/* extract the callback array and its count in two steps */
-		/* fall through */
 	case 3:
 		_debug("extract CB count");
 		ret = afs_extract_data(call, true);
@@ -343,7 +344,6 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 		iov_iter_discard(&call->iter, READ, call->count2 * 3 * 4);
 		call->unmarshall++;
 
-		/* Fall through */
 	case 4:
 		_debug("extract discard %zu/%u",
 		       iov_iter_count(&call->iter), call->count2 * 3 * 4);
@@ -372,10 +372,10 @@ static void SRXAFSCB_InitCallBackState(struct work_struct *work)
 {
 	struct afs_call *call = container_of(work, struct afs_call, work);
 
-	_enter("{%p}", call->server);
+	_enter("{%p}", call->cm_server);
 
-	if (call->server)
-		afs_init_callback_state(call->server);
+	if (call->cm_server)
+		afs_init_callback_state(call->cm_server);
 	afs_send_empty_reply(call);
 	afs_put_call(call);
 	_leave("");
@@ -422,7 +422,6 @@ static int afs_deliver_cb_init_call_back_state3(struct afs_call *call)
 		afs_extract_to_buf(call, 11 * sizeof(__be32));
 		call->unmarshall++;
 
-		/* Fall through */
 	case 1:
 		_debug("extract UUID");
 		ret = afs_extract_data(call, false);
@@ -538,7 +537,6 @@ static int afs_deliver_cb_probe_uuid(struct afs_call *call)
 		afs_extract_to_buf(call, 11 * sizeof(__be32));
 		call->unmarshall++;
 
-		/* Fall through */
 	case 1:
 		_debug("extract UUID");
 		ret = afs_extract_data(call, false);
@@ -675,7 +673,6 @@ static int afs_deliver_yfs_cb_callback(struct afs_call *call)
 		call->unmarshall++;
 
 		/* extract the FID array and its count in two steps */
-		/* Fall through */
 	case 1:
 		_debug("extract FID count");
 		ret = afs_extract_data(call, true);
@@ -695,7 +692,6 @@ static int afs_deliver_yfs_cb_callback(struct afs_call *call)
 		afs_extract_to_buf(call, size);
 		call->unmarshall++;
 
-		/* Fall through */
 	case 2:
 		_debug("extract FID array");
 		ret = afs_extract_data(call, false);

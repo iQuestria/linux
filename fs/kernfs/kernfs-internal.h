@@ -17,14 +17,11 @@
 #include <linux/xattr.h>
 
 #include <linux/kernfs.h>
-#include <linux/fs_context.h>
 
 struct kernfs_iattrs {
-	kuid_t			ia_uid;
-	kgid_t			ia_gid;
-	struct timespec64	ia_atime;
-	struct timespec64	ia_mtime;
-	struct timespec64	ia_ctime;
+	struct iattr		ia_iattr;
+	void			*ia_secdata;
+	u32			ia_secdata_len;
 
 	struct simple_xattrs	xattrs;
 };
@@ -81,7 +78,7 @@ static inline struct kernfs_node *kernfs_dentry_node(struct dentry *dentry)
 }
 
 extern const struct super_operations kernfs_sops;
-extern struct kmem_cache *kernfs_node_cache, *kernfs_iattrs_cache;
+extern struct kmem_cache *kernfs_node_cache;
 
 /*
  * inode.c

@@ -466,7 +466,17 @@ static int telem_pss_states_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(telem_pss_states);
+static int telem_pss_state_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, telem_pss_states_show, inode->i_private);
+}
+
+static const struct file_operations telem_pss_ops = {
+	.open		= telem_pss_state_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 static int telem_ioss_states_show(struct seq_file *s, void *unused)
 {
@@ -495,7 +505,17 @@ static int telem_ioss_states_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(telem_ioss_states);
+static int telem_ioss_state_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, telem_ioss_states_show, inode->i_private);
+}
+
+static const struct file_operations telem_ioss_ops = {
+	.open		= telem_ioss_state_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 static int telem_soc_states_show(struct seq_file *s, void *unused)
 {
@@ -644,7 +664,17 @@ static int telem_soc_states_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(telem_soc_states);
+static int telem_soc_state_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, telem_soc_states_show, inode->i_private);
+}
+
+static const struct file_operations telem_socstate_ops = {
+	.open		= telem_soc_state_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 static int telem_s0ix_res_get(void *data, u64 *val)
 {
@@ -930,7 +960,7 @@ static int __init telemetry_debugfs_init(void)
 
 	f = debugfs_create_file("pss_info", S_IFREG | S_IRUGO,
 				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_pss_states_fops);
+				&telem_pss_ops);
 	if (!f) {
 		pr_err("pss_sample_info debugfs register failed\n");
 		goto out;
@@ -938,7 +968,7 @@ static int __init telemetry_debugfs_init(void)
 
 	f = debugfs_create_file("ioss_info", S_IFREG | S_IRUGO,
 				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_ioss_states_fops);
+				&telem_ioss_ops);
 	if (!f) {
 		pr_err("ioss_sample_info debugfs register failed\n");
 		goto out;
@@ -946,7 +976,7 @@ static int __init telemetry_debugfs_init(void)
 
 	f = debugfs_create_file("soc_states", S_IFREG | S_IRUGO,
 				debugfs_conf->telemetry_dbg_dir,
-				NULL, &telem_soc_states_fops);
+				NULL, &telem_socstate_ops);
 	if (!f) {
 		pr_err("ioss_sample_info debugfs register failed\n");
 		goto out;

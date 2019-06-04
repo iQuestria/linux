@@ -1,10 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Intel MIC Platform Software Stack (MPSS)
  *
  * Copyright(c) 2015 Intel Corporation.
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License, version 2, as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
  * Intel SCIF driver.
+ *
  */
 #include "scif_main.h"
 #include "scif_map.h"
@@ -192,18 +201,23 @@ static void scif_mmu_notifier_release(struct mmu_notifier *mn,
 }
 
 static int scif_mmu_notifier_invalidate_range_start(struct mmu_notifier *mn,
-					const struct mmu_notifier_range *range)
+						     struct mm_struct *mm,
+						     unsigned long start,
+						     unsigned long end,
+						     bool blockable)
 {
 	struct scif_mmu_notif	*mmn;
 
 	mmn = container_of(mn, struct scif_mmu_notif, ep_mmu_notifier);
-	scif_rma_destroy_tcw(mmn, range->start, range->end - range->start);
+	scif_rma_destroy_tcw(mmn, start, end - start);
 
 	return 0;
 }
 
 static void scif_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
-			const struct mmu_notifier_range *range)
+						   struct mm_struct *mm,
+						   unsigned long start,
+						   unsigned long end)
 {
 	/*
 	 * Nothing to do here, everything needed was done in

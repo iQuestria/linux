@@ -65,6 +65,7 @@ struct mapped_device {
 	 */
 	struct work_struct work;
 	wait_queue_head_t wait;
+	atomic_t pending[2];
 	spinlock_t deferred_lock;
 	struct bio_list deferred;
 
@@ -106,6 +107,9 @@ struct mapped_device {
 
 	struct block_device *bdev;
 
+	/* zero-length flush that will be cloned and submitted to targets */
+	struct bio flush_bio;
+
 	struct dm_stats stats;
 
 	/* for blk-mq request-based DM support */
@@ -115,7 +119,7 @@ struct mapped_device {
 	struct srcu_struct io_barrier;
 };
 
-void disable_discard(struct mapped_device *md);
+int md_in_flight(struct mapped_device *md);
 void disable_write_same(struct mapped_device *md);
 void disable_write_zeroes(struct mapped_device *md);
 

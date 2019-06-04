@@ -74,11 +74,6 @@ vc4_get_hang_state_ioctl(struct drm_device *dev, void *data,
 	u32 i;
 	int ret = 0;
 
-	if (!vc4->v3d) {
-		DRM_DEBUG("VC4_GET_HANG_STATE with no VC4 V3D probed\n");
-		return -ENODEV;
-	}
-
 	spin_lock_irqsave(&vc4->job_lock, irqflags);
 	kernel_state = vc4->hang_state;
 	if (!kernel_state) {
@@ -541,7 +536,7 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->bo[i]->base);
 		bo->seqno = seqno;
 
-		reservation_object_add_shared_fence(bo->base.base.resv, exec->fence);
+		reservation_object_add_shared_fence(bo->resv, exec->fence);
 	}
 
 	list_for_each_entry(bo, &exec->unref_list, unref_head) {
@@ -552,7 +547,7 @@ vc4_update_bo_seqnos(struct vc4_exec_info *exec, uint64_t seqno)
 		bo = to_vc4_bo(&exec->rcl_write_bo[i]->base);
 		bo->write_seqno = seqno;
 
-		reservation_object_add_excl_fence(bo->base.base.resv, exec->fence);
+		reservation_object_add_excl_fence(bo->resv, exec->fence);
 	}
 }
 
@@ -564,7 +559,7 @@ vc4_unlock_bo_reservations(struct drm_device *dev,
 	int i;
 
 	for (i = 0; i < exec->bo_count; i++) {
-		struct drm_gem_object *bo = &exec->bo[i]->base;
+		struct vc4_bo *bo = to_vc4_bo(&exec->bo[i]->base);
 
 		ww_mutex_unlock(&bo->resv->lock);
 	}
@@ -586,13 +581,13 @@ vc4_lock_bo_reservations(struct drm_device *dev,
 {
 	int contended_lock = -1;
 	int i, ret;
-	struct drm_gem_object *bo;
+	struct vc4_bo *bo;
 
 	ww_acquire_init(acquire_ctx, &reservation_ww_class);
 
 retry:
 	if (contended_lock != -1) {
-		bo = &exec->bo[contended_lock]->base;
+		bo = to_vc4_bo(&exec->bo[contended_lock]->base);
 		ret = ww_mutex_lock_slow_interruptible(&bo->resv->lock,
 						       acquire_ctx);
 		if (ret) {
@@ -605,19 +600,19 @@ retry:
 		if (i == contended_lock)
 			continue;
 
-		bo = &exec->bo[i]->base;
+		bo = to_vc4_bo(&exec->bo[i]->base);
 
 		ret = ww_mutex_lock_interruptible(&bo->resv->lock, acquire_ctx);
 		if (ret) {
 			int j;
 
 			for (j = 0; j < i; j++) {
-				bo = &exec->bo[j]->base;
+				bo = to_vc4_bo(&exec->bo[j]->base);
 				ww_mutex_unlock(&bo->resv->lock);
 			}
 
 			if (contended_lock != -1 && contended_lock >= i) {
-				bo = &exec->bo[contended_lock]->base;
+				bo = to_vc4_bo(&exec->bo[contended_lock]->base);
 
 				ww_mutex_unlock(&bo->resv->lock);
 			}
@@ -638,9 +633,9 @@ retry:
 	 * before we commit the CL to the hardware.
 	 */
 	for (i = 0; i < exec->bo_count; i++) {
-		bo = &exec->bo[i]->base;
+		bo = to_vc4_bo(&exec->bo[i]->base);
 
-		ret = reservation_object_reserve_shared(bo->resv, 1);
+		ret = reservation_object_reserve_shared(bo->resv);
 		if (ret) {
 			vc4_unlock_bo_reservations(dev, exec, acquire_ctx);
 			return ret;
@@ -686,7 +681,7 @@ vc4_queue_submit(struct drm_device *dev, struct vc4_exec_info *exec,
 	exec->fence = &fence->base;
 
 	if (out_sync)
-		drm_syncobj_replace_fence(out_sync, exec->fence);
+		drm_syncobj_replace_fence(out_sync, 0, exec->fence);
 
 	vc4_update_bo_seqnos(exec, seqno);
 
@@ -969,7 +964,12 @@ vc4_complete_exec(struct drm_device *dev, struct vc4_exec_info *exec)
 	/* Release the reference we had on the perf monitor. */
 	vc4_perfmon_put(exec->perfmon);
 
-	vc4_v3d_pm_put(vc4);
+	mutex_lock(&vc4->power_lock);
+	if (--vc4->power_refcount == 0) {
+		pm_runtime_mark_last_busy(&vc4->v3d->pdev->dev);
+		pm_runtime_put_autosuspend(&vc4->v3d->pdev->dev);
+	}
+	mutex_unlock(&vc4->power_lock);
 
 	kfree(exec);
 }
@@ -1124,11 +1124,6 @@ vc4_submit_cl_ioctl(struct drm_device *dev, void *data,
 	struct dma_fence *in_fence;
 	int ret = 0;
 
-	if (!vc4->v3d) {
-		DRM_DEBUG("VC4_SUBMIT_CL with no VC4 V3D probed\n");
-		return -ENODEV;
-	}
-
 	if ((args->flags & ~(VC4_SUBMIT_CL_USE_CLEAR_COLOR |
 			     VC4_SUBMIT_CL_FIXED_RCL_ORDER |
 			     VC4_SUBMIT_CL_RCL_ORDER_INCREASING_X |
@@ -1148,11 +1143,17 @@ vc4_submit_cl_ioctl(struct drm_device *dev, void *data,
 		return -ENOMEM;
 	}
 
-	ret = vc4_v3d_pm_get(vc4);
-	if (ret) {
-		kfree(exec);
-		return ret;
+	mutex_lock(&vc4->power_lock);
+	if (vc4->power_refcount++ == 0) {
+		ret = pm_runtime_get_sync(&vc4->v3d->pdev->dev);
+		if (ret < 0) {
+			mutex_unlock(&vc4->power_lock);
+			vc4->power_refcount--;
+			kfree(exec);
+			return ret;
+		}
 	}
+	mutex_unlock(&vc4->power_lock);
 
 	exec->args = args;
 	INIT_LIST_HEAD(&exec->unref_list);
@@ -1172,7 +1173,7 @@ vc4_submit_cl_ioctl(struct drm_device *dev, void *data,
 
 	if (args->in_sync) {
 		ret = drm_syncobj_find_fence(file_priv, args->in_sync,
-					     0, 0, &in_fence);
+					     0, &in_fence);
 		if (ret)
 			goto fail;
 

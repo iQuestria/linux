@@ -31,13 +31,6 @@ struct user_struct {
 	atomic_long_t pipe_bufs;  /* how many pages are allocated in pipe buffers */
 
 #ifdef CONFIG_KEYS
-	/*
-	 * These pointers can only change from NULL to a non-NULL value once.
-	 * Writes are protected by key_user_keyring_mutex.
-	 * Unlocked readers should use READ_ONCE() unless they know that
-	 * install_user_keyrings() has been called successfully (which sets
-	 * these members to non-NULL values, preventing further modifications).
-	 */
 	struct key *uid_keyring;	/* UID specific keyring */
 	struct key *session_keyring;	/* UID's default session keyring */
 #endif
@@ -47,7 +40,7 @@ struct user_struct {
 	kuid_t uid;
 
 #if defined(CONFIG_PERF_EVENTS) || defined(CONFIG_BPF_SYSCALL) || \
-    defined(CONFIG_NET) || defined(CONFIG_IO_URING)
+    defined(CONFIG_NET)
 	atomic_long_t locked_vm;
 #endif
 

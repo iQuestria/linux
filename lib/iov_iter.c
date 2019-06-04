@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/export.h>
 #include <linux/bvec.h>
 #include <linux/uio.h>
@@ -7,7 +6,6 @@
 #include <linux/vmalloc.h>
 #include <linux/splice.h>
 #include <net/checksum.h>
-#include <linux/scatterlist.h>
 
 #define PIPE_PARANOIA /* for now */
 
@@ -137,7 +135,7 @@
 
 static int copyout(void __user *to, const void *from, size_t n)
 {
-	if (access_ok(to, n)) {
+	if (access_ok(VERIFY_WRITE, to, n)) {
 		kasan_check_read(from, n);
 		n = raw_copy_to_user(to, from, n);
 	}
@@ -146,7 +144,7 @@ static int copyout(void __user *to, const void *from, size_t n)
 
 static int copyin(void *to, const void __user *from, size_t n)
 {
-	if (access_ok(from, n)) {
+	if (access_ok(VERIFY_READ, from, n)) {
 		kasan_check_write(to, n);
 		n = raw_copy_from_user(to, from, n);
 	}
@@ -562,20 +560,13 @@ static size_t copy_pipe_to_iter(const void *addr, size_t bytes,
 	return bytes;
 }
 
-static __wsum csum_and_memcpy(void *to, const void *from, size_t len,
-			      __wsum sum, size_t off)
-{
-	__wsum next = csum_partial_copy_nocheck(from, to, len, 0);
-	return csum_block_add(sum, next, off);
-}
-
 static size_t csum_and_copy_to_pipe_iter(const void *addr, size_t bytes,
 				__wsum *csum, struct iov_iter *i)
 {
 	struct pipe_inode_info *pipe = i->pipe;
 	size_t n, r;
 	size_t off = 0;
-	__wsum sum = *csum;
+	__wsum sum = *csum, next;
 	int idx;
 
 	if (!sanity(i))
@@ -587,7 +578,8 @@ static size_t csum_and_copy_to_pipe_iter(const void *addr, size_t bytes,
 	for ( ; n; idx = next_idx(idx, pipe), r = 0) {
 		size_t chunk = min_t(size_t, n, PAGE_SIZE - r);
 		char *p = kmap_atomic(pipe->bufs[idx].page);
-		sum = csum_and_memcpy(p + r, addr, chunk, sum, off);
+		next = csum_partial_copy_nocheck(addr, p + r, chunk, 0);
+		sum = csum_block_add(sum, next, off);
 		kunmap_atomic(p);
 		i->idx = idx;
 		i->iov_offset = r + chunk;
@@ -621,7 +613,7 @@ EXPORT_SYMBOL(_copy_to_iter);
 #ifdef CONFIG_ARCH_HAS_UACCESS_MCSAFE
 static int copyout_mcsafe(void __user *to, const void *from, size_t n)
 {
-	if (access_ok(to, n)) {
+	if (access_ok(VERIFY_WRITE, to, n)) {
 		kasan_check_read(from, n);
 		n = copy_to_user_mcsafe((__force void *) to, from, n);
 	}
@@ -862,21 +854,8 @@ EXPORT_SYMBOL(_copy_from_iter_full_nocache);
 
 static inline bool page_copy_sane(struct page *page, size_t offset, size_t n)
 {
-	struct page *head;
-	size_t v = n + offset;
-
-	/*
-	 * The general case needs to access the page order in order
-	 * to compute the page size.
-	 * However, we mostly deal with order-0 pages and thus can
-	 * avoid a possible cache line miss for requests that fit all
-	 * page orders.
-	 */
-	if (n <= v && v <= PAGE_SIZE)
-		return true;
-
-	head = compound_head(page);
-	v += (page - head) << PAGE_SHIFT;
+	struct page *head = compound_head(page);
+	size_t v = n + offset + page_address(page) - page_address(head);
 
 	if (likely(n <= v && v <= (PAGE_SIZE << compound_order(head))))
 		return true;
@@ -1294,9 +1273,7 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 			len = maxpages * PAGE_SIZE;
 		addr &= ~(PAGE_SIZE - 1);
 		n = DIV_ROUND_UP(len, PAGE_SIZE);
-		res = get_user_pages_fast(addr, n,
-				iov_iter_rw(i) != WRITE ?  FOLL_WRITE : 0,
-				pages);
+		res = get_user_pages_fast(addr, n, iov_iter_rw(i) != WRITE, pages);
 		if (unlikely(res < 0))
 			return res;
 		return (res == n ? len : res * PAGE_SIZE) - *start;
@@ -1377,8 +1354,7 @@ ssize_t iov_iter_get_pages_alloc(struct iov_iter *i,
 		p = get_pages_array(n);
 		if (!p)
 			return -ENOMEM;
-		res = get_user_pages_fast(addr, n,
-				iov_iter_rw(i) != WRITE ?  FOLL_WRITE : 0, p);
+		res = get_user_pages_fast(addr, n, iov_iter_rw(i) != WRITE, p);
 		if (unlikely(res < 0)) {
 			kvfree(p);
 			return res;
@@ -1424,15 +1400,17 @@ size_t csum_and_copy_from_iter(void *addr, size_t bytes, __wsum *csum,
 		err ? v.iov_len : 0;
 	}), ({
 		char *p = kmap_atomic(v.bv_page);
-		sum = csum_and_memcpy((to += v.bv_len) - v.bv_len,
-				      p + v.bv_offset, v.bv_len,
-				      sum, off);
+		next = csum_partial_copy_nocheck(p + v.bv_offset,
+						 (to += v.bv_len) - v.bv_len,
+						 v.bv_len, 0);
 		kunmap_atomic(p);
+		sum = csum_block_add(sum, next, off);
 		off += v.bv_len;
 	}),({
-		sum = csum_and_memcpy((to += v.iov_len) - v.iov_len,
-				      v.iov_base, v.iov_len,
-				      sum, off);
+		next = csum_partial_copy_nocheck(v.iov_base,
+						 (to += v.iov_len) - v.iov_len,
+						 v.iov_len, 0);
+		sum = csum_block_add(sum, next, off);
 		off += v.iov_len;
 	})
 	)
@@ -1466,15 +1444,17 @@ bool csum_and_copy_from_iter_full(void *addr, size_t bytes, __wsum *csum,
 		0;
 	}), ({
 		char *p = kmap_atomic(v.bv_page);
-		sum = csum_and_memcpy((to += v.bv_len) - v.bv_len,
-				      p + v.bv_offset, v.bv_len,
-				      sum, off);
+		next = csum_partial_copy_nocheck(p + v.bv_offset,
+						 (to += v.bv_len) - v.bv_len,
+						 v.bv_len, 0);
 		kunmap_atomic(p);
+		sum = csum_block_add(sum, next, off);
 		off += v.bv_len;
 	}),({
-		sum = csum_and_memcpy((to += v.iov_len) - v.iov_len,
-				      v.iov_base, v.iov_len,
-				      sum, off);
+		next = csum_partial_copy_nocheck(v.iov_base,
+						 (to += v.iov_len) - v.iov_len,
+						 v.iov_len, 0);
+		sum = csum_block_add(sum, next, off);
 		off += v.iov_len;
 	})
 	)
@@ -1484,11 +1464,10 @@ bool csum_and_copy_from_iter_full(void *addr, size_t bytes, __wsum *csum,
 }
 EXPORT_SYMBOL(csum_and_copy_from_iter_full);
 
-size_t csum_and_copy_to_iter(const void *addr, size_t bytes, void *csump,
+size_t csum_and_copy_to_iter(const void *addr, size_t bytes, __wsum *csum,
 			     struct iov_iter *i)
 {
 	const char *from = addr;
-	__wsum *csum = csump;
 	__wsum sum, next;
 	size_t off = 0;
 
@@ -1512,15 +1491,17 @@ size_t csum_and_copy_to_iter(const void *addr, size_t bytes, void *csump,
 		err ? v.iov_len : 0;
 	}), ({
 		char *p = kmap_atomic(v.bv_page);
-		sum = csum_and_memcpy(p + v.bv_offset,
-				      (from += v.bv_len) - v.bv_len,
-				      v.bv_len, sum, off);
+		next = csum_partial_copy_nocheck((from += v.bv_len) - v.bv_len,
+						 p + v.bv_offset,
+						 v.bv_len, 0);
 		kunmap_atomic(p);
+		sum = csum_block_add(sum, next, off);
 		off += v.bv_len;
 	}),({
-		sum = csum_and_memcpy(v.iov_base,
-				     (from += v.iov_len) - v.iov_len,
-				     v.iov_len, sum, off);
+		next = csum_partial_copy_nocheck((from += v.iov_len) - v.iov_len,
+						 v.iov_base,
+						 v.iov_len, 0);
+		sum = csum_block_add(sum, next, off);
 		off += v.iov_len;
 	})
 	)
@@ -1528,25 +1509,6 @@ size_t csum_and_copy_to_iter(const void *addr, size_t bytes, void *csump,
 	return bytes;
 }
 EXPORT_SYMBOL(csum_and_copy_to_iter);
-
-size_t hash_and_copy_to_iter(const void *addr, size_t bytes, void *hashp,
-		struct iov_iter *i)
-{
-#ifdef CONFIG_CRYPTO
-	struct ahash_request *hash = hashp;
-	struct scatterlist sg;
-	size_t copied;
-
-	copied = copy_to_iter(addr, bytes, i);
-	sg_init_one(&sg, addr, copied);
-	ahash_request_set_crypt(hash, &sg, NULL, copied);
-	crypto_ahash_update(hash);
-	return copied;
-#else
-	return 0;
-#endif
-}
-EXPORT_SYMBOL(hash_and_copy_to_iter);
 
 int iov_iter_npages(const struct iov_iter *i, int maxpages)
 {
@@ -1684,7 +1646,7 @@ int import_single_range(int rw, void __user *buf, size_t len,
 {
 	if (len > MAX_RW_COUNT)
 		len = MAX_RW_COUNT;
-	if (unlikely(!access_ok(buf, len)))
+	if (unlikely(!access_ok(!rw, buf, len)))
 		return -EFAULT;
 
 	iov->iov_base = buf;

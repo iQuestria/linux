@@ -29,6 +29,7 @@
 #include <linux/input.h>
 #include <linux/slab.h>
 #include <asm/cpu_device_id.h>
+#include <asm/platform_sst_audio.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -98,8 +99,8 @@ struct byt_rt5640_private {
 static bool is_bytcr;
 
 static unsigned long byt_rt5640_quirk = BYT_RT5640_MCLK_EN;
-static int quirk_override = -1;
-module_param_named(quirk, quirk_override, int, 0444);
+static unsigned int quirk_override;
+module_param_named(quirk, quirk_override, uint, 0444);
 MODULE_PARM_DESC(quirk, "Board-specific quirk override");
 
 static void log_quirks(struct device *dev)
@@ -431,18 +432,6 @@ static const struct dmi_system_id byt_rt5640_quirk_table[] = {
 	{
 		.matches = {
 			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
-			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "ME176C"),
-		},
-		.driver_data = (void *)(BYT_RT5640_IN1_MAP |
-					BYT_RT5640_JD_SRC_JD2_IN4N |
-					BYT_RT5640_OVCD_TH_2000UA |
-					BYT_RT5640_OVCD_SF_0P75 |
-					BYT_RT5640_SSP0_AIF1 |
-					BYT_RT5640_MCLK_EN),
-	},
-	{
-		.matches = {
-			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
 			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "T100TA"),
 		},
 		.driver_data = (void *)(BYT_RT5640_IN1_MAP |
@@ -683,33 +672,6 @@ static const struct dmi_system_id byt_rt5640_quirk_table[] = {
 					BYT_RT5640_MONO_SPEAKER |
 					BYT_RT5640_DIFF_MIC |
 					BYT_RT5640_SSP0_AIF2 |
-					BYT_RT5640_MCLK_EN),
-	},
-	{	/* Point of View Mobii TAB-P1005W-232 (V2.0) */
-		.matches = {
-			DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "POV"),
-			DMI_EXACT_MATCH(DMI_BOARD_NAME, "I102A"),
-		},
-		.driver_data = (void *)(BYT_RT5640_IN1_MAP |
-					BYT_RT5640_JD_SRC_JD2_IN4N |
-					BYT_RT5640_OVCD_TH_2000UA |
-					BYT_RT5640_OVCD_SF_0P75 |
-					BYT_RT5640_DIFF_MIC |
-					BYT_RT5640_SSP0_AIF1 |
-					BYT_RT5640_MCLK_EN),
-	},
-	{
-		/* Prowise PT301 */
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Prowise"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "PT301"),
-		},
-		.driver_data = (void *)(BYT_RT5640_IN1_MAP |
-					BYT_RT5640_JD_SRC_JD2_IN4N |
-					BYT_RT5640_OVCD_TH_2000UA |
-					BYT_RT5640_OVCD_SF_0P75 |
-					BYT_RT5640_DIFF_MIC |
-					BYT_RT5640_SSP0_AIF1 |
 					BYT_RT5640_MCLK_EN),
 	},
 	{
@@ -1149,12 +1111,11 @@ struct acpi_chan_package {   /* ACPICA seems to require 64 bit integers */
 
 static int snd_byt_rt5640_mc_probe(struct platform_device *pdev)
 {
-	static const char * const map_name[] = { "dmic1", "dmic2", "in1", "in3" };
+	const char * const map_name[] = { "dmic1", "dmic2", "in1", "in3" };
 	const struct dmi_system_id *dmi_id;
 	struct byt_rt5640_private *priv;
 	struct snd_soc_acpi_mach *mach;
-	const char *platform_name;
-	struct acpi_device *adev;
+	const char *i2c_name = NULL;
 	int ret_val = 0;
 	int dai_index = 0;
 	int i;
@@ -1178,11 +1139,11 @@ static int snd_byt_rt5640_mc_probe(struct platform_device *pdev)
 	}
 
 	/* fixup codec name based on HID */
-	adev = acpi_dev_get_first_match_dev(mach->id, NULL, -1);
-	if (adev) {
+	i2c_name = acpi_dev_get_first_match_name(mach->id, NULL, -1);
+	if (i2c_name) {
 		snprintf(byt_rt5640_codec_name, sizeof(byt_rt5640_codec_name),
-			 "i2c-%s", acpi_dev_name(adev));
-		put_device(&adev->dev);
+			"%s%s", "i2c-", i2c_name);
+
 		byt_rt5640_dais[dai_index].codec_name = byt_rt5640_codec_name;
 	}
 
@@ -1191,7 +1152,10 @@ static int snd_byt_rt5640_mc_probe(struct platform_device *pdev)
 	 * (will be overridden if DMI quirk is detected)
 	 */
 	if (is_valleyview()) {
-		if (mach->mach_params.acpi_ipc_irq_index == 0)
+		struct sst_platform_info *p_info = mach->pdata;
+		const struct sst_res_info *res_info = p_info->res_info;
+
+		if (res_info->acpi_ipc_irq_index == 0)
 			is_bytcr = true;
 	}
 
@@ -1254,7 +1218,7 @@ static int snd_byt_rt5640_mc_probe(struct platform_device *pdev)
 	dmi_id = dmi_first_match(byt_rt5640_quirk_table);
 	if (dmi_id)
 		byt_rt5640_quirk = (unsigned long)dmi_id->driver_data;
-	if (quirk_override != -1) {
+	if (quirk_override) {
 		dev_info(&pdev->dev, "Overriding quirk 0x%x => 0x%x\n",
 			 (unsigned int)byt_rt5640_quirk, quirk_override);
 		byt_rt5640_quirk = quirk_override;
@@ -1317,14 +1281,6 @@ static int snd_byt_rt5640_mc_probe(struct platform_device *pdev)
 			"mono" : "stereo",
 		 map_name[BYT_RT5640_MAP(byt_rt5640_quirk)]);
 	byt_rt5640_card.long_name = byt_rt5640_long_name;
-
-	/* override plaform name, if required */
-	platform_name = mach->mach_params.platform;
-
-	ret_val = snd_soc_fixup_dai_links_platform_name(&byt_rt5640_card,
-							platform_name);
-	if (ret_val)
-		return ret_val;
 
 	ret_val = devm_snd_soc_register_card(&pdev->dev, &byt_rt5640_card);
 

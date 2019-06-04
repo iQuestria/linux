@@ -34,12 +34,7 @@ static void msm_atomic_wait_for_commit_done(struct drm_device *dev,
 		if (!new_crtc_state->active)
 			continue;
 
-		if (drm_crtc_vblank_get(crtc))
-			continue;
-
 		kms->funcs->wait_for_crtc_commit_done(kms, crtc);
-
-		drm_crtc_vblank_put(crtc);
 	}
 }
 
@@ -49,13 +44,15 @@ int msm_atomic_prepare_fb(struct drm_plane *plane,
 	struct msm_drm_private *priv = plane->dev->dev_private;
 	struct msm_kms *kms = priv->kms;
 	struct drm_gem_object *obj;
+	struct msm_gem_object *msm_obj;
 	struct dma_fence *fence;
 
 	if (!new_state->fb)
 		return 0;
 
 	obj = msm_framebuffer_bo(new_state->fb, 0);
-	fence = reservation_object_get_excl_rcu(obj->resv);
+	msm_obj = to_msm_bo(obj);
+	fence = reservation_object_get_excl_rcu(msm_obj->resv);
 
 	drm_atomic_set_fence_for_plane(new_state, fence);
 
@@ -81,8 +78,7 @@ void msm_atomic_commit_tail(struct drm_atomic_state *state)
 		kms->funcs->commit(kms, state);
 	}
 
-	if (!state->legacy_cursor_update)
-		msm_atomic_wait_for_commit_done(dev, state);
+	msm_atomic_wait_for_commit_done(dev, state);
 
 	kms->funcs->complete_commit(kms, state);
 

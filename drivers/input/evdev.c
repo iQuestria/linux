@@ -503,13 +503,14 @@ static int evdev_open(struct inode *inode, struct file *file)
 {
 	struct evdev *evdev = container_of(inode->i_cdev, struct evdev, cdev);
 	unsigned int bufsize = evdev_compute_buffer_size(evdev->handle.dev);
+	unsigned int size = sizeof(struct evdev_client) +
+					bufsize * sizeof(struct input_event);
 	struct evdev_client *client;
 	int error;
 
-	client = kzalloc(struct_size(client, buffer, bufsize),
-			 GFP_KERNEL | __GFP_NOWARN);
+	client = kzalloc(size, GFP_KERNEL | __GFP_NOWARN);
 	if (!client)
-		client = vzalloc(struct_size(client, buffer, bufsize));
+		client = vzalloc(size);
 	if (!client)
 		return -ENOMEM;
 
@@ -523,7 +524,7 @@ static int evdev_open(struct inode *inode, struct file *file)
 		goto err_free_client;
 
 	file->private_data = client;
-	stream_open(inode, file);
+	nonseekable_open(inode, file);
 
 	return 0;
 

@@ -1,7 +1,6 @@
-# SPDX-License-Identifier: GPL-2.0-only
 config NET_VENDOR_MEDIATEK
 	bool "MediaTek ethernet driver"
-	depends on ARCH_MEDIATEK || SOC_MT7621
+	depends on ARCH_MEDIATEK
 	---help---
 	  If you have a Mediatek SoC with ethernet, say Y.
 

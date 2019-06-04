@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config R8188EU
 	tristate "Realtek RTL8188EU Wireless LAN NIC driver"
 	depends on WLAN && USB && CFG80211

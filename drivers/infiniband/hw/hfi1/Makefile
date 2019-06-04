@@ -24,7 +24,6 @@ hfi1-y := \
 	mad.o \
 	mmu_rb.o \
 	msix.o \
-	opfn.o \
 	pcie.o \
 	pio.o \
 	pio_copy.o \
@@ -35,7 +34,6 @@ hfi1-y := \
 	ruc.o \
 	sdma.o \
 	sysfs.o \
-	tid_rdma.o \
 	trace.o \
 	uc.o \
 	ud.o \

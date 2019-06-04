@@ -16,7 +16,6 @@
 #include <linux/of.h>
 #include <linux/sched/task_stack.h>
 #include <linux/sched/mm.h>
-#include <linux/sched/hotplug.h>
 #include <asm/irq.h>
 #include <asm/traps.h>
 #include <asm/sections.h>
@@ -113,8 +112,12 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 {
 }
 
-static int ipi_dummy_dev;
+static void __init enable_smp_ipi(void)
+{
+	enable_percpu_irq(ipi_irq, 0);
+}
 
+static int ipi_dummy_dev;
 void __init setup_smp_ipi(void)
 {
 	int rc;
@@ -127,7 +130,7 @@ void __init setup_smp_ipi(void)
 	if (rc)
 		panic("%s IRQ request failed\n", __func__);
 
-	enable_percpu_irq(ipi_irq, 0);
+	enable_smp_ipi();
 }
 
 void __init setup_smp(void)
@@ -135,7 +138,7 @@ void __init setup_smp(void)
 	struct device_node *node = NULL;
 	int cpu;
 
-	for_each_of_cpu_node(node) {
+	while ((node = of_find_node_by_type(node, "cpu"))) {
 		if (!of_device_is_available(node))
 			continue;
 
@@ -158,11 +161,12 @@ volatile unsigned int secondary_stack;
 
 int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 {
-	unsigned long mask = 1 << cpu;
+	unsigned int tmp;
 
-	secondary_stack =
-		(unsigned int) task_stack_page(tidle) + THREAD_SIZE - 8;
+	secondary_stack = (unsigned int)tidle->stack + THREAD_SIZE;
+
 	secondary_hint = mfcr("cr31");
+
 	secondary_ccr  = mfcr("cr18");
 
 	/*
@@ -172,13 +176,10 @@ int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 	 */
 	mtcr("cr17", 0x22);
 
-	if (mask & mfcr("cr<29, 0>")) {
-		send_arch_ipi(cpumask_of(cpu));
-	} else {
-		/* Enable cpu in SMP reset ctrl reg */
-		mask |= mfcr("cr<29, 0>");
-		mtcr("cr<29, 0>", mask);
-	}
+	/* Enable cpu in SMP reset ctrl reg */
+	tmp = mfcr("cr<29, 0>");
+	tmp |= 1 << cpu;
+	mtcr("cr<29, 0>", tmp);
 
 	/* Wait for the cpu online */
 	while (!cpu_online(cpu));
@@ -218,7 +219,7 @@ void csky_start_secondary(void)
 	init_fpu();
 #endif
 
-	enable_percpu_irq(ipi_irq, 0);
+	enable_smp_ipi();
 
 	mmget(mm);
 	mmgrab(mm);
@@ -234,46 +235,3 @@ void csky_start_secondary(void)
 	preempt_disable();
 	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
 }
-
-#ifdef CONFIG_HOTPLUG_CPU
-int __cpu_disable(void)
-{
-	unsigned int cpu = smp_processor_id();
-
-	set_cpu_online(cpu, false);
-
-	irq_migrate_all_off_this_cpu();
-
-	clear_tasks_mm_cpumask(cpu);
-
-	return 0;
-}
-
-void __cpu_die(unsigned int cpu)
-{
-	if (!cpu_wait_death(cpu, 5)) {
-		pr_crit("CPU%u: shutdown failed\n", cpu);
-		return;
-	}
-	pr_notice("CPU%u: shutdown\n", cpu);
-}
-
-void arch_cpu_idle_dead(void)
-{
-	idle_task_exit();
-
-	cpu_report_death();
-
-	while (!secondary_stack)
-		arch_cpu_idle();
-
-	local_irq_disable();
-
-	asm volatile(
-		"mov	sp, %0\n"
-		"mov	r8, %0\n"
-		"jmpi	csky_start_secondary"
-		:
-		: "r" (secondary_stack));
-}
-#endif

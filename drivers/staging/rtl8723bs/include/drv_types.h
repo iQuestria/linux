@@ -37,6 +37,10 @@ enum _NIC_VERSION {
 
 #include <rtw_ht.h>
 
+#ifdef CONFIG_INTEL_WIDI
+#include <rtw_intel_widi.h>
+#endif
+
 #include <rtw_cmd.h>
 #include <cmd_osdep.h>
 #include <rtw_security.h>
@@ -61,6 +65,7 @@ enum _NIC_VERSION {
 #include <rtw_event.h>
 #include <rtw_mlme_ext.h>
 #include <rtw_ap.h>
+#include <rtw_efuse.h>
 #include <rtw_version.h>
 #include <rtw_odm.h>
 
@@ -216,6 +221,7 @@ struct registry_priv
 #define BSSID_SZ(field)   sizeof(((struct wlan_bssid_ex *) 0)->field)
 
 #include <drv_types_sdio.h>
+#define INTF_DATA SDIO_DATA
 
 #define is_primary_adapter(adapter) (1)
 #define get_iface_type(adapter) (IFACE_PORT0)
@@ -471,8 +477,9 @@ struct dvobj_priv
 
 /*-------- below is for SDIO INTERFACE --------*/
 
-struct sdio_data intf_data;
-
+#ifdef INTF_DATA
+	INTF_DATA intf_data;
+#endif
 };
 
 #define dvobj_to_pwrctl(dvobj) (&(dvobj->pwrctl_priv))

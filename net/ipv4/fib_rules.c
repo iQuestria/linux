@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -8,6 +7,11 @@
  *
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  *		Thomas Graf <tgraf@suug.ch>
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  *
  * Fixes:
  *		Rani Assaf	:	local_rule cannot be deleted
@@ -194,15 +198,11 @@ static int fib4_rule_match(struct fib_rule *rule, struct flowi *fl, int flags)
 
 static struct fib_table *fib_empty_table(struct net *net)
 {
-	u32 id = 1;
+	u32 id;
 
-	while (1) {
+	for (id = 1; id <= RT_TABLE_MAX; id++)
 		if (!fib_get_table(net, id))
 			return fib_new_table(net, id);
-
-		if (id++ == RT_TABLE_MAX)
-			break;
-	}
 	return NULL;
 }
 

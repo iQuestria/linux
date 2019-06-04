@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * i740fb - framebuffer driver for Intel740
  * Copyright (c) 2011 Ondrej Zary

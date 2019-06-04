@@ -639,7 +639,8 @@ static int lpi2c_imx_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused lpi2c_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM_SLEEP
+static int lpi2c_runtime_suspend(struct device *dev)
 {
 	struct lpi2c_imx_struct *lpi2c_imx = dev_get_drvdata(dev);
 
@@ -649,7 +650,7 @@ static int __maybe_unused lpi2c_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused lpi2c_runtime_resume(struct device *dev)
+static int lpi2c_runtime_resume(struct device *dev)
 {
 	struct lpi2c_imx_struct *lpi2c_imx = dev_get_drvdata(dev);
 	int ret;
@@ -670,6 +671,10 @@ static const struct dev_pm_ops lpi2c_pm_ops = {
 	SET_RUNTIME_PM_OPS(lpi2c_runtime_suspend,
 			   lpi2c_runtime_resume, NULL)
 };
+#define IMX_LPI2C_PM      (&lpi2c_pm_ops)
+#else
+#define IMX_LPI2C_PM      NULL
+#endif
 
 static struct platform_driver lpi2c_imx_driver = {
 	.probe = lpi2c_imx_probe,
@@ -677,7 +682,7 @@ static struct platform_driver lpi2c_imx_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.of_match_table = lpi2c_imx_of_match,
-		.pm = &lpi2c_pm_ops,
+		.pm = IMX_LPI2C_PM,
 	},
 };
 

@@ -144,8 +144,6 @@ static void reuseport_free_rcu(struct rcu_head *head)
  *  reuseport_add_sock - Add a socket to the reuseport group of another.
  *  @sk:  New socket to add to the group.
  *  @sk2: Socket belonging to the existing reuseport group.
- *  @bind_inany: Whether or not the group is bound to a local INANY address.
- *
  *  May return ENOMEM and not add socket to group under memory pressure.
  */
 int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
@@ -189,7 +187,6 @@ int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 		call_rcu(&old_reuse->rcu, reuseport_free_rcu);
 	return 0;
 }
-EXPORT_SYMBOL(reuseport_add_sock);
 
 void reuseport_detach_sock(struct sock *sk)
 {

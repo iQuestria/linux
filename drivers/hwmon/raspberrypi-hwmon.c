@@ -86,9 +86,18 @@ static umode_t rpi_is_visible(const void *_data, enum hwmon_sensor_types type,
 	return 0444;
 }
 
+static const u32 rpi_in_config[] = {
+	HWMON_I_LCRIT_ALARM,
+	0
+};
+
+static const struct hwmon_channel_info rpi_in = {
+	.type = hwmon_in,
+	.config = rpi_in_config,
+};
+
 static const struct hwmon_channel_info *rpi_info[] = {
-	HWMON_CHANNEL_INFO(in,
-			   HWMON_I_LCRIT_ALARM),
+	&rpi_in,
 	NULL
 };
 

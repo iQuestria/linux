@@ -23,7 +23,11 @@
 
 #include <asm/ptrace.h>
 #include <asm/user.h>
-#include <linux/elf-em.h>
+
+/*
+ * This should really be in linux/elf-em.h.
+ */
+#define EM_HEXAGON	164   /* QUALCOMM Hexagon */
 
 struct elf32_hdr;
 

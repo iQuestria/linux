@@ -22,6 +22,9 @@
 #include <net/netfilter/nf_conntrack_expect.h>
 #include <net/netfilter/nf_conntrack_seqadj.h>
 #include <net/netfilter/nf_nat.h>
+#include <net/netfilter/nf_nat_l3proto.h>
+#include <net/netfilter/nf_nat_l4proto.h>
+#include <net/netfilter/nf_nat_core.h>
 #include <net/netfilter/nf_nat_helper.h>
 
 /* Frobs data inside this packet, which is linear. */
@@ -95,6 +98,7 @@ bool __nf_nat_mangle_tcp_packet(struct sk_buff *skb,
 				const char *rep_buffer,
 				unsigned int rep_len, bool adjust)
 {
+	const struct nf_nat_l3proto *l3proto;
 	struct tcphdr *tcph;
 	int oldlen, datalen;
 
@@ -114,8 +118,9 @@ bool __nf_nat_mangle_tcp_packet(struct sk_buff *skb,
 
 	datalen = skb->len - protoff;
 
-	nf_nat_csum_recalc(skb, nf_ct_l3num(ct), IPPROTO_TCP,
-			   tcph, &tcph->check, datalen, oldlen);
+	l3proto = __nf_nat_l3proto_find(nf_ct_l3num(ct));
+	l3proto->csum_recalc(skb, IPPROTO_TCP, tcph, &tcph->check,
+			     datalen, oldlen);
 
 	if (adjust && rep_len != match_len)
 		nf_ct_seqadj_set(ct, ctinfo, tcph->seq,
@@ -145,6 +150,7 @@ nf_nat_mangle_udp_packet(struct sk_buff *skb,
 			 const char *rep_buffer,
 			 unsigned int rep_len)
 {
+	const struct nf_nat_l3proto *l3proto;
 	struct udphdr *udph;
 	int datalen, oldlen;
 
@@ -170,8 +176,9 @@ nf_nat_mangle_udp_packet(struct sk_buff *skb,
 	if (!udph->check && skb->ip_summed != CHECKSUM_PARTIAL)
 		return true;
 
-	nf_nat_csum_recalc(skb, nf_ct_l3num(ct), IPPROTO_UDP,
-			   udph, &udph->check, datalen, oldlen);
+	l3proto = __nf_nat_l3proto_find(nf_ct_l3num(ct));
+	l3proto->csum_recalc(skb, IPPROTO_UDP, udph, &udph->check,
+			     datalen, oldlen);
 
 	return true;
 }

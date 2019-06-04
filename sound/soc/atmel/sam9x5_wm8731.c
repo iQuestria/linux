@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * sam9x5_wm8731   --	SoC audio for AT91SAM9X5-based boards
  *			that are using WM8731 as codec.
@@ -11,6 +10,12 @@
  *
  * Based on sam9g20_wm8731.c by:
  * Sedji Gaouaou <sedji.gaouaou@atmel.com>
+ *
+ *  This program is free software; you can redistribute  it and/or modify it
+ *  under  the terms of  the GNU General  Public License as published by the
+ *  Free Software Foundation;  either version 2 of the  License, or (at your
+ *  option) any later version.
+ *
  */
 #include <linux/of.h>
 #include <linux/export.h>

@@ -33,7 +33,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mlx5/driver.h>
-#include <net/vxlan.h>
 #include "mlx5_core.h"
 #include "vxlan.h"
 
@@ -205,8 +204,8 @@ struct mlx5_vxlan *mlx5_vxlan_create(struct mlx5_core_dev *mdev)
 	spin_lock_init(&vxlan->lock);
 	hash_init(vxlan->htable);
 
-	/* Hardware adds 4789 (IANA_VXLAN_UDP_PORT) by default */
-	mlx5_vxlan_add_port(vxlan, IANA_VXLAN_UDP_PORT);
+	/* Hardware adds 4789 by default */
+	mlx5_vxlan_add_port(vxlan, 4789);
 
 	return vxlan;
 }

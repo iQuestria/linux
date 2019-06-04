@@ -249,8 +249,28 @@ int rsnd_adg_set_src_timesel_gen2(struct rsnd_mod *src_mod,
 	out  = out	<< shift;
 	mask = 0x0f1f	<< shift;
 
-	rsnd_mod_bset(adg_mod, SRCIN_TIMSEL(id / 2),  mask, in);
-	rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL(id / 2), mask, out);
+	switch (id / 2) {
+	case 0:
+		rsnd_mod_bset(adg_mod, SRCIN_TIMSEL0,  mask, in);
+		rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL0, mask, out);
+		break;
+	case 1:
+		rsnd_mod_bset(adg_mod, SRCIN_TIMSEL1,  mask, in);
+		rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL1, mask, out);
+		break;
+	case 2:
+		rsnd_mod_bset(adg_mod, SRCIN_TIMSEL2,  mask, in);
+		rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL2, mask, out);
+		break;
+	case 3:
+		rsnd_mod_bset(adg_mod, SRCIN_TIMSEL3,  mask, in);
+		rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL3, mask, out);
+		break;
+	case 4:
+		rsnd_mod_bset(adg_mod, SRCIN_TIMSEL4,  mask, in);
+		rsnd_mod_bset(adg_mod, SRCOUT_TIMSEL4, mask, out);
+		break;
+	}
 
 	if (en)
 		rsnd_mod_bset(adg_mod, DIV_EN, en, en);
@@ -279,7 +299,17 @@ static void rsnd_adg_set_ssi_clk(struct rsnd_mod *ssi_mod, u32 val)
 	if (id == 8)
 		return;
 
-	rsnd_mod_bset(adg_mod, AUDIO_CLK_SEL(id / 4), mask, val);
+	switch (id / 4) {
+	case 0:
+		rsnd_mod_bset(adg_mod, AUDIO_CLK_SEL0, mask, val);
+		break;
+	case 1:
+		rsnd_mod_bset(adg_mod, AUDIO_CLK_SEL1, mask, val);
+		break;
+	case 2:
+		rsnd_mod_bset(adg_mod, AUDIO_CLK_SEL2, mask, val);
+		break;
+	}
 
 	dev_dbg(dev, "AUDIO_CLK_SEL is 0x%x\n", val);
 }
@@ -583,7 +613,7 @@ int rsnd_adg_probe(struct rsnd_priv *priv)
 		return -ENOMEM;
 
 	ret = rsnd_mod_init(priv, &adg->mod, &adg_ops,
-		      NULL, 0, 0);
+		      NULL, NULL, 0, 0);
 	if (ret)
 		return ret;
 

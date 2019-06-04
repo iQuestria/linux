@@ -28,8 +28,6 @@
 
 #define CEDRUS_CAPABILITY_UNTILED	BIT(0)
 
-#define CEDRUS_QUIRK_NO_DMA_OFFSET	BIT(0)
-
 enum cedrus_codec {
 	CEDRUS_CODEC_MPEG2,
 
@@ -93,7 +91,6 @@ struct cedrus_dec_ops {
 
 struct cedrus_variant {
 	unsigned int	capabilities;
-	unsigned int	quirks;
 };
 
 struct cedrus_dev {
@@ -108,6 +105,8 @@ struct cedrus_dev {
 
 	/* Device file mutex */
 	struct mutex		dev_mutex;
+	/* Interrupt spinlock */
+	spinlock_t		irq_lock;
 
 	void __iomem		*base;
 
@@ -143,14 +142,11 @@ static inline dma_addr_t cedrus_buf_addr(struct vb2_buffer *buf,
 }
 
 static inline dma_addr_t cedrus_dst_buf_addr(struct cedrus_ctx *ctx,
-					     int index, unsigned int plane)
+					     unsigned int index,
+					     unsigned int plane)
 {
-	struct vb2_buffer *buf;
+	struct vb2_buffer *buf = ctx->dst_bufs[index];
 
-	if (index < 0)
-		return 0;
-
-	buf = ctx->dst_bufs[index];
 	return buf ? cedrus_buf_addr(buf, &ctx->dst_fmt, plane) : 0;
 }
 

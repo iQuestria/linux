@@ -48,6 +48,7 @@ struct rwdt_priv {
 	void __iomem *base;
 	struct watchdog_device wdev;
 	unsigned long clk_rate;
+	u16 time_left;
 	u8 cks;
 };
 
@@ -73,17 +74,12 @@ static int rwdt_init_timeout(struct watchdog_device *wdev)
 static int rwdt_start(struct watchdog_device *wdev)
 {
 	struct rwdt_priv *priv = watchdog_get_drvdata(wdev);
-	u8 val;
 
 	pm_runtime_get_sync(wdev->parent);
 
-	/* Stop the timer before we modify any register */
-	val = readb_relaxed(priv->base + RWTCSRA) & ~RWTCSRA_TME;
-	rwdt_write(priv, val, RWTCSRA);
-
-	rwdt_init_timeout(wdev);
-	rwdt_write(priv, priv->cks, RWTCSRA);
 	rwdt_write(priv, 0, RWTCSRB);
+	rwdt_write(priv, priv->cks, RWTCSRA);
+	rwdt_init_timeout(wdev);
 
 	while (readb_relaxed(priv->base + RWTCSRA) & RWTCSRA_WRFLG)
 		cpu_relax();
@@ -151,6 +147,7 @@ static const struct soc_device_attribute rwdt_quirks_match[] = {
 		.data = (void *)1,	/* needs single CPU */
 	}, {
 		.soc_id = "r8a7792",
+		.revision = "*",
 		.data = (void *)0,	/* needs SMP disabled */
 	},
 	{ /* sentinel */ }
@@ -176,6 +173,7 @@ static inline bool rwdt_blacklisted(struct device *dev) { return false; }
 static int rwdt_probe(struct platform_device *pdev)
 {
 	struct rwdt_priv *priv;
+	struct resource *res;
 	struct clk *clk;
 	unsigned long clks_per_sec;
 	int ret, i;
@@ -187,7 +185,8 @@ static int rwdt_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
 
@@ -221,8 +220,8 @@ static int rwdt_probe(struct platform_device *pdev)
 		goto out_pm_disable;
 	}
 
-	priv->wdev.info = &rwdt_ident;
-	priv->wdev.ops = &rwdt_ops;
+	priv->wdev.info = &rwdt_ident,
+	priv->wdev.ops = &rwdt_ops,
 	priv->wdev.parent = &pdev->dev;
 	priv->wdev.min_timeout = 1;
 	priv->wdev.max_timeout = DIV_BY_CLKS_PER_SEC(priv, 65536);
@@ -235,7 +234,9 @@ static int rwdt_probe(struct platform_device *pdev)
 	watchdog_stop_on_unregister(&priv->wdev);
 
 	/* This overrides the default timeout only if DT configuration was found */
-	watchdog_init_timeout(&priv->wdev, 0, &pdev->dev);
+	ret = watchdog_init_timeout(&priv->wdev, 0, &pdev->dev);
+	if (ret)
+		dev_warn(&pdev->dev, "Specified timeout value invalid, using default\n");
 
 	ret = watchdog_register_device(&priv->wdev);
 	if (ret < 0)
@@ -262,9 +263,10 @@ static int __maybe_unused rwdt_suspend(struct device *dev)
 {
 	struct rwdt_priv *priv = dev_get_drvdata(dev);
 
-	if (watchdog_active(&priv->wdev))
+	if (watchdog_active(&priv->wdev)) {
+		priv->time_left = readw(priv->base + RWTCNT);
 		rwdt_stop(&priv->wdev);
-
+	}
 	return 0;
 }
 
@@ -272,9 +274,10 @@ static int __maybe_unused rwdt_resume(struct device *dev)
 {
 	struct rwdt_priv *priv = dev_get_drvdata(dev);
 
-	if (watchdog_active(&priv->wdev))
+	if (watchdog_active(&priv->wdev)) {
 		rwdt_start(&priv->wdev);
-
+		rwdt_write(priv, priv->time_left, RWTCNT);
+	}
 	return 0;
 }
 

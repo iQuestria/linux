@@ -13,9 +13,7 @@
 #define AQ_MAIN_H
 
 #include "aq_common.h"
-#include "aq_nic.h"
 
-void aq_ndev_schedule_work(struct work_struct *work);
 struct net_device *aq_ndev_alloc(void);
 
 #endif /* AQ_MAIN_H */

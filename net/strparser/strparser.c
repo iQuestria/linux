@@ -14,8 +14,7 @@
 #include <linux/file.h>
 #include <linux/in.h>
 #include <linux/kernel.h>
-#include <linux/export.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/net.h>
 #include <linux/netdevice.h>
 #include <linux/poll.h>
@@ -141,11 +140,13 @@ static int __strp_recv(read_descriptor_t *desc, struct sk_buff *orig_skb,
 			/* We are going to append to the frags_list of head.
 			 * Need to unshare the frag_list.
 			 */
-			err = skb_unclone(head, GFP_ATOMIC);
-			if (err) {
-				STRP_STATS_INCR(strp->stats.mem_fail);
-				desc->error = err;
-				return 0;
+			if (skb_has_frag_list(head)) {
+				err = skb_unclone(head, GFP_ATOMIC);
+				if (err) {
+					STRP_STATS_INCR(strp->stats.mem_fail);
+					desc->error = err;
+					return 0;
+				}
 			}
 
 			if (unlikely(skb_shinfo(head)->frag_list)) {
@@ -298,7 +299,7 @@ static int __strp_recv(read_descriptor_t *desc, struct sk_buff *orig_skb,
 			break;
 		}
 
-		/* Positive extra indicates more bytes than needed for the
+		/* Positive extra indicates ore bytes than needed for the
 		 * message
 		 */
 
@@ -546,12 +547,17 @@ void strp_check_rcv(struct strparser *strp)
 }
 EXPORT_SYMBOL_GPL(strp_check_rcv);
 
-static int __init strp_dev_init(void)
+static int __init strp_mod_init(void)
 {
 	strp_wq = create_singlethread_workqueue("kstrp");
-	if (unlikely(!strp_wq))
-		return -ENOMEM;
 
 	return 0;
 }
-device_initcall(strp_dev_init);
+
+static void __exit strp_mod_exit(void)
+{
+	destroy_workqueue(strp_wq);
+}
+module_init(strp_mod_init);
+module_exit(strp_mod_exit);
+MODULE_LICENSE("GPL");

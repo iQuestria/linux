@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Media device
  *
@@ -6,6 +5,15 @@
  *
  * Contacts: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
  *	     Sakari Ailus <sakari.ailus@iki.fi>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/compat.h>
@@ -373,14 +381,10 @@ static long media_device_get_topology(struct media_device *mdev, void *arg)
 static long media_device_request_alloc(struct media_device *mdev,
 				       int *alloc_fd)
 {
-#ifdef CONFIG_MEDIA_CONTROLLER_REQUEST_API
 	if (!mdev->ops || !mdev->ops->req_validate || !mdev->ops->req_queue)
 		return -ENOTTY;
 
 	return media_request_alloc(mdev, alloc_fd);
-#else
-	return -ENOTTY;
-#endif
 }
 
 static long copy_arg_from_user(void *karg, void __user *uarg, unsigned int cmd)

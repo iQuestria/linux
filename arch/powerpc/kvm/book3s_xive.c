@@ -166,8 +166,7 @@ static irqreturn_t xive_esc_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio,
-				  bool single_escalation)
+static int xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio)
 {
 	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
 	struct xive_q *q = &xc->queues[prio];
@@ -186,7 +185,7 @@ int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio,
 		return -EIO;
 	}
 
-	if (single_escalation)
+	if (xc->xive->single_escalation)
 		name = kasprintf(GFP_KERNEL, "kvm-%d-%d",
 				 vcpu->kvm->arch.lpid, xc->server_num);
 	else
@@ -218,7 +217,7 @@ int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio,
 	 * interrupt, thus leaving it effectively masked after
 	 * it fires once.
 	 */
-	if (single_escalation) {
+	if (xc->xive->single_escalation) {
 		struct irq_data *d = irq_get_irq_data(xc->esc_virq[prio]);
 		struct xive_irq_data *xd = irq_data_get_irq_handler_data(d);
 
@@ -271,14 +270,14 @@ static int xive_provision_queue(struct kvm_vcpu *vcpu, u8 prio)
 	return rc;
 }
 
-/* Called with xive->lock held */
+/* Called with kvm_lock held */
 static int xive_check_provisioning(struct kvm *kvm, u8 prio)
 {
 	struct kvmppc_xive *xive = kvm->arch.xive;
 	struct kvm_vcpu *vcpu;
 	int i, rc;
 
-	lockdep_assert_held(&xive->lock);
+	lockdep_assert_held(&kvm->lock);
 
 	/* Already provisioned ? */
 	if (xive->qmap & (1 << prio))
@@ -292,8 +291,7 @@ static int xive_check_provisioning(struct kvm *kvm, u8 prio)
 			continue;
 		rc = xive_provision_queue(vcpu, prio);
 		if (rc == 0 && !xive->single_escalation)
-			kvmppc_xive_attach_escalation(vcpu, prio,
-						      xive->single_escalation);
+			xive_attach_escalation(vcpu, prio);
 		if (rc)
 			return rc;
 	}
@@ -344,7 +342,7 @@ static int xive_try_pick_queue(struct kvm_vcpu *vcpu, u8 prio)
 	return atomic_add_unless(&q->count, 1, max) ? 0 : -EBUSY;
 }
 
-int kvmppc_xive_select_target(struct kvm *kvm, u32 *server, u8 prio)
+static int xive_select_target(struct kvm *kvm, u32 *server, u8 prio)
 {
 	struct kvm_vcpu *vcpu;
 	int i, rc;
@@ -380,6 +378,11 @@ int kvmppc_xive_select_target(struct kvm *kvm, u32 *server, u8 prio)
 
 	/* No available target ! */
 	return -EBUSY;
+}
+
+static u32 xive_vp(struct kvmppc_xive *xive, u32 server)
+{
+	return xive->vp_base + kvmppc_pack_vcpu_id(xive->kvm, server);
 }
 
 static u8 xive_lock_and_mask(struct kvmppc_xive *xive,
@@ -427,8 +430,8 @@ static u8 xive_lock_and_mask(struct kvmppc_xive *xive,
 	 */
 	if (xd->flags & OPAL_XIVE_IRQ_MASK_VIA_FW) {
 		xive_native_configure_irq(hw_num,
-				kvmppc_xive_vp(xive, state->act_server),
-				MASKED, state->number);
+					  xive_vp(xive, state->act_server),
+					  MASKED, state->number);
 		/* set old_p so we can track if an H_EOI was done */
 		state->old_p = true;
 		state->old_q = false;
@@ -483,8 +486,8 @@ static void xive_finish_unmask(struct kvmppc_xive *xive,
 	 */
 	if (xd->flags & OPAL_XIVE_IRQ_MASK_VIA_FW) {
 		xive_native_configure_irq(hw_num,
-				kvmppc_xive_vp(xive, state->act_server),
-				state->act_priority, state->number);
+					  xive_vp(xive, state->act_server),
+					  state->act_priority, state->number);
 		/* If an EOI is needed, do it here */
 		if (!state->old_p)
 			xive_vm_source_eoi(hw_num, xd);
@@ -532,7 +535,7 @@ static int xive_target_interrupt(struct kvm *kvm,
 	 * priority. The count for that new target will have
 	 * already been incremented.
 	 */
-	rc = kvmppc_xive_select_target(kvm, &server, prio);
+	rc = xive_select_target(kvm, &server, prio);
 
 	/*
 	 * We failed to find a target ? Not much we can do
@@ -560,7 +563,7 @@ static int xive_target_interrupt(struct kvm *kvm,
 	kvmppc_xive_select_irq(state, &hw_num, NULL);
 
 	return xive_native_configure_irq(hw_num,
-					 kvmppc_xive_vp(xive, server),
+					 xive_vp(xive, server),
 					 prio, state->number);
 }
 
@@ -621,12 +624,9 @@ int kvmppc_xive_set_xive(struct kvm *kvm, u32 irq, u32 server,
 		 irq, server, priority);
 
 	/* First, check provisioning of queues */
-	if (priority != MASKED) {
-		mutex_lock(&xive->lock);
+	if (priority != MASKED)
 		rc = xive_check_provisioning(xive->kvm,
 			      xive_prio_from_guest(priority));
-		mutex_unlock(&xive->lock);
-	}
 	if (rc) {
 		pr_devel("  provisioning failure %d !\n", rc);
 		return rc;
@@ -849,8 +849,7 @@ int kvmppc_xive_set_icp(struct kvm_vcpu *vcpu, u64 icpval)
 
 	/*
 	 * We can't update the state of a "pushed" VCPU, but that
-	 * shouldn't happen because the vcpu->mutex makes running a
-	 * vcpu mutually exclusive with doing one_reg get/set on it.
+	 * shouldn't happen.
 	 */
 	if (WARN_ON(vcpu->arch.xive_pushed))
 		return -EIO;
@@ -941,13 +940,6 @@ int kvmppc_xive_set_mapped(struct kvm *kvm, unsigned long guest_irq,
 	/* Turn the IPI hard off */
 	xive_vm_esb_load(&state->ipi_data, XIVE_ESB_SET_PQ_01);
 
-	/*
-	 * Reset ESB guest mapping. Needed when ESB pages are exposed
-	 * to the guest in XIVE native mode
-	 */
-	if (xive->ops && xive->ops->reset_mapped)
-		xive->ops->reset_mapped(kvm, guest_irq);
-
 	/* Grab info about irq */
 	state->pt_number = hw_irq;
 	state->pt_data = irq_data_get_irq_handler_data(host_data);
@@ -959,7 +951,7 @@ int kvmppc_xive_set_mapped(struct kvm *kvm, unsigned long guest_irq,
 	 * which is fine for a never started interrupt.
 	 */
 	xive_native_configure_irq(hw_irq,
-				  kvmppc_xive_vp(xive, state->act_server),
+				  xive_vp(xive, state->act_server),
 				  state->act_priority, state->number);
 
 	/*
@@ -1033,17 +1025,9 @@ int kvmppc_xive_clr_mapped(struct kvm *kvm, unsigned long guest_irq,
 	state->pt_number = 0;
 	state->pt_data = NULL;
 
-	/*
-	 * Reset ESB guest mapping. Needed when ESB pages are exposed
-	 * to the guest in XIVE native mode
-	 */
-	if (xive->ops && xive->ops->reset_mapped) {
-		xive->ops->reset_mapped(kvm, guest_irq);
-	}
-
 	/* Reconfigure the IPI */
 	xive_native_configure_irq(state->ipi_number,
-				  kvmppc_xive_vp(xive, state->act_server),
+				  xive_vp(xive, state->act_server),
 				  state->act_priority, state->number);
 
 	/*
@@ -1065,7 +1049,7 @@ int kvmppc_xive_clr_mapped(struct kvm *kvm, unsigned long guest_irq,
 }
 EXPORT_SYMBOL_GPL(kvmppc_xive_clr_mapped);
 
-void kvmppc_xive_disable_vcpu_interrupts(struct kvm_vcpu *vcpu)
+static void kvmppc_xive_disable_vcpu_interrupts(struct kvm_vcpu *vcpu)
 {
 	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
 	struct kvm *kvm = vcpu->kvm;
@@ -1099,34 +1083,13 @@ void kvmppc_xive_disable_vcpu_interrupts(struct kvm_vcpu *vcpu)
 			arch_spin_unlock(&sb->lock);
 		}
 	}
-
-	/* Disable vcpu's escalation interrupt */
-	if (vcpu->arch.xive_esc_on) {
-		__raw_readq((void __iomem *)(vcpu->arch.xive_esc_vaddr +
-					     XIVE_ESB_SET_PQ_01));
-		vcpu->arch.xive_esc_on = false;
-	}
-
-	/*
-	 * Clear pointers to escalation interrupt ESB.
-	 * This is safe because the vcpu->mutex is held, preventing
-	 * any other CPU from concurrently executing a KVM_RUN ioctl.
-	 */
-	vcpu->arch.xive_esc_vaddr = 0;
-	vcpu->arch.xive_esc_raddr = 0;
 }
 
 void kvmppc_xive_cleanup_vcpu(struct kvm_vcpu *vcpu)
 {
 	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
-	struct kvmppc_xive *xive = vcpu->kvm->arch.xive;
+	struct kvmppc_xive *xive = xc->xive;
 	int i;
-
-	if (!kvmppc_xics_enabled(vcpu))
-		return;
-
-	if (!xc)
-		return;
 
 	pr_devel("cleanup_vcpu(cpu=%d)\n", xc->server_num);
 
@@ -1166,10 +1129,6 @@ void kvmppc_xive_cleanup_vcpu(struct kvm_vcpu *vcpu)
 	}
 	/* Free the VP */
 	kfree(xc);
-
-	/* Cleanup the vcpu */
-	vcpu->arch.irq_type = KVMPPC_IRQ_DEFAULT;
-	vcpu->arch.xive_vcpu = NULL;
 }
 
 int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
@@ -1187,7 +1146,7 @@ int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
 	}
 	if (xive->kvm != vcpu->kvm)
 		return -EPERM;
-	if (vcpu->arch.irq_type != KVMPPC_IRQ_DEFAULT)
+	if (vcpu->arch.irq_type)
 		return -EBUSY;
 	if (kvmppc_xive_find_server(vcpu->kvm, cpu)) {
 		pr_devel("Duplicate !\n");
@@ -1202,12 +1161,12 @@ int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
 		return -ENOMEM;
 
 	/* We need to synchronize with queue provisioning */
-	mutex_lock(&xive->lock);
+	mutex_lock(&vcpu->kvm->lock);
 	vcpu->arch.xive_vcpu = xc;
 	xc->xive = xive;
 	xc->vcpu = vcpu;
 	xc->server_num = cpu;
-	xc->vp_id = kvmppc_xive_vp(xive, cpu);
+	xc->vp_id = xive_vp(xive, cpu);
 	xc->mfrr = 0xff;
 	xc->valid = true;
 
@@ -1260,8 +1219,7 @@ int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
 		if (xive->qmap & (1 << i)) {
 			r = xive_provision_queue(vcpu, i);
 			if (r == 0 && !xive->single_escalation)
-				kvmppc_xive_attach_escalation(
-					vcpu, i, xive->single_escalation);
+				xive_attach_escalation(vcpu, i);
 			if (r)
 				goto bail;
 		} else {
@@ -1276,7 +1234,7 @@ int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
 	}
 
 	/* If not done above, attach priority 0 escalation */
-	r = kvmppc_xive_attach_escalation(vcpu, 0, xive->single_escalation);
+	r = xive_attach_escalation(vcpu, 0);
 	if (r)
 		goto bail;
 
@@ -1286,7 +1244,7 @@ int kvmppc_xive_connect_vcpu(struct kvm_device *dev,
 		xive_vm_esb_load(&xc->vp_ipi_data, XIVE_ESB_SET_PQ_00);
 
 bail:
-	mutex_unlock(&xive->lock);
+	mutex_unlock(&vcpu->kvm->lock);
 	if (r) {
 		kvmppc_xive_cleanup_vcpu(vcpu);
 		return r;
@@ -1527,15 +1485,16 @@ static int xive_get_source(struct kvmppc_xive *xive, long irq, u64 addr)
 	return 0;
 }
 
-struct kvmppc_xive_src_block *kvmppc_xive_create_src_block(
-	struct kvmppc_xive *xive, int irq)
+static struct kvmppc_xive_src_block *xive_create_src_block(struct kvmppc_xive *xive,
+							   int irq)
 {
+	struct kvm *kvm = xive->kvm;
 	struct kvmppc_xive_src_block *sb;
 	int i, bid;
 
 	bid = irq >> KVMPPC_XICS_ICS_SHIFT;
 
-	mutex_lock(&xive->lock);
+	mutex_lock(&kvm->lock);
 
 	/* block already exists - somebody else got here first */
 	if (xive->src_blocks[bid])
@@ -1550,7 +1509,6 @@ struct kvmppc_xive_src_block *kvmppc_xive_create_src_block(
 
 	for (i = 0; i < KVMPPC_XICS_IRQ_PER_ICS; i++) {
 		sb->irq_state[i].number = (bid << KVMPPC_XICS_ICS_SHIFT) | i;
-		sb->irq_state[i].eisn = 0;
 		sb->irq_state[i].guest_priority = MASKED;
 		sb->irq_state[i].saved_priority = MASKED;
 		sb->irq_state[i].act_priority = MASKED;
@@ -1562,7 +1520,7 @@ struct kvmppc_xive_src_block *kvmppc_xive_create_src_block(
 		xive->max_sbid = bid;
 
 out:
-	mutex_unlock(&xive->lock);
+	mutex_unlock(&kvm->lock);
 	return xive->src_blocks[bid];
 }
 
@@ -1607,7 +1565,7 @@ static int xive_set_source(struct kvmppc_xive *xive, long irq, u64 addr)
 	sb = kvmppc_xive_find_source(xive, irq, &idx);
 	if (!sb) {
 		pr_devel("No source, creating source block...\n");
-		sb = kvmppc_xive_create_src_block(xive, irq);
+		sb = xive_create_src_block(xive, irq);
 		if (!sb) {
 			pr_devel("Failed to create block...\n");
 			return -ENOMEM;
@@ -1672,9 +1630,9 @@ static int xive_set_source(struct kvmppc_xive *xive, long irq, u64 addr)
 	/* If we have a priority target the interrupt */
 	if (act_prio != MASKED) {
 		/* First, check provisioning of queues */
-		mutex_lock(&xive->lock);
+		mutex_lock(&xive->kvm->lock);
 		rc = xive_check_provisioning(xive->kvm, act_prio);
-		mutex_unlock(&xive->lock);
+		mutex_unlock(&xive->kvm->lock);
 
 		/* Target interrupt */
 		if (rc == 0)
@@ -1828,9 +1786,10 @@ static void kvmppc_xive_cleanup_irq(u32 hw_num, struct xive_irq_data *xd)
 {
 	xive_vm_esb_load(xd, XIVE_ESB_SET_PQ_01);
 	xive_native_configure_irq(hw_num, 0, MASKED, 0);
+	xive_cleanup_irq_data(xd);
 }
 
-void kvmppc_xive_free_sources(struct kvmppc_xive_src_block *sb)
+static void kvmppc_xive_free_sources(struct kvmppc_xive_src_block *sb)
 {
 	int i;
 
@@ -1841,10 +1800,9 @@ void kvmppc_xive_free_sources(struct kvmppc_xive_src_block *sb)
 			continue;
 
 		kvmppc_xive_cleanup_irq(state->ipi_number, &state->ipi_data);
-		xive_cleanup_irq_data(&state->ipi_data);
 		xive_native_free_irq(state->ipi_number);
 
-		/* Pass-through, cleanup too but keep IRQ hw data */
+		/* Pass-through, cleanup too */
 		if (state->pt_number)
 			kvmppc_xive_cleanup_irq(state->pt_number, state->pt_data);
 
@@ -1852,53 +1810,16 @@ void kvmppc_xive_free_sources(struct kvmppc_xive_src_block *sb)
 	}
 }
 
-/*
- * Called when device fd is closed.  kvm->lock is held.
- */
-static void kvmppc_xive_release(struct kvm_device *dev)
+static void kvmppc_xive_free(struct kvm_device *dev)
 {
 	struct kvmppc_xive *xive = dev->private;
 	struct kvm *kvm = xive->kvm;
-	struct kvm_vcpu *vcpu;
 	int i;
-
-	pr_devel("Releasing xive device\n");
-
-	/*
-	 * Since this is the device release function, we know that
-	 * userspace does not have any open fd referring to the
-	 * device.  Therefore there can not be any of the device
-	 * attribute set/get functions being executed concurrently,
-	 * and similarly, the connect_vcpu and set/clr_mapped
-	 * functions also cannot be being executed.
-	 */
 
 	debugfs_remove(xive->dentry);
 
-	/*
-	 * We should clean up the vCPU interrupt presenters first.
-	 */
-	kvm_for_each_vcpu(i, vcpu, kvm) {
-		/*
-		 * Take vcpu->mutex to ensure that no one_reg get/set ioctl
-		 * (i.e. kvmppc_xive_[gs]et_icp) can be done concurrently.
-		 * Holding the vcpu->mutex also means that the vcpu cannot
-		 * be executing the KVM_RUN ioctl, and therefore it cannot
-		 * be executing the XIVE push or pull code or accessing
-		 * the XIVE MMIO regions.
-		 */
-		mutex_lock(&vcpu->mutex);
-		kvmppc_xive_cleanup_vcpu(vcpu);
-		mutex_unlock(&vcpu->mutex);
-	}
-
-	/*
-	 * Now that we have cleared vcpu->arch.xive_vcpu, vcpu->arch.irq_type
-	 * and vcpu->arch.xive_esc_[vr]addr on each vcpu, we are safe
-	 * against xive code getting called during vcpu execution or
-	 * set/get one_reg operations.
-	 */
-	kvm->arch.xive = NULL;
+	if (kvm)
+		kvm->arch.xive = NULL;
 
 	/* Mask and free interrupts */
 	for (i = 0; i <= xive->max_sbid; i++) {
@@ -1911,45 +1832,11 @@ static void kvmppc_xive_release(struct kvm_device *dev)
 	if (xive->vp_base != XIVE_INVALID_VP)
 		xive_native_free_vp_block(xive->vp_base);
 
-	/*
-	 * A reference of the kvmppc_xive pointer is now kept under
-	 * the xive_devices struct of the machine for reuse. It is
-	 * freed when the VM is destroyed for now until we fix all the
-	 * execution paths.
-	 */
 
+	kfree(xive);
 	kfree(dev);
 }
 
-/*
- * When the guest chooses the interrupt mode (XICS legacy or XIVE
- * native), the VM will switch of KVM device. The previous device will
- * be "released" before the new one is created.
- *
- * Until we are sure all execution paths are well protected, provide a
- * fail safe (transitional) method for device destruction, in which
- * the XIVE device pointer is recycled and not directly freed.
- */
-struct kvmppc_xive *kvmppc_xive_get_device(struct kvm *kvm, u32 type)
-{
-	struct kvmppc_xive **kvm_xive_device = type == KVM_DEV_TYPE_XIVE ?
-		&kvm->arch.xive_devices.native :
-		&kvm->arch.xive_devices.xics_on_xive;
-	struct kvmppc_xive *xive = *kvm_xive_device;
-
-	if (!xive) {
-		xive = kzalloc(sizeof(*xive), GFP_KERNEL);
-		*kvm_xive_device = xive;
-	} else {
-		memset(xive, 0, sizeof(*xive));
-	}
-
-	return xive;
-}
-
-/*
- * Create a XICS device with XIVE backend.  kvm->lock is held.
- */
 static int kvmppc_xive_create(struct kvm_device *dev, u32 type)
 {
 	struct kvmppc_xive *xive;
@@ -1958,14 +1845,13 @@ static int kvmppc_xive_create(struct kvm_device *dev, u32 type)
 
 	pr_devel("Creating xive for partition\n");
 
-	xive = kvmppc_xive_get_device(kvm, type);
+	xive = kzalloc(sizeof(*xive), GFP_KERNEL);
 	if (!xive)
 		return -ENOMEM;
 
 	dev->private = xive;
 	xive->dev = dev;
 	xive->kvm = kvm;
-	mutex_init(&xive->lock);
 
 	/* Already there ? */
 	if (kvm->arch.xive)
@@ -1997,43 +1883,6 @@ static int kvmppc_xive_create(struct kvm_device *dev, u32 type)
 	return 0;
 }
 
-int kvmppc_xive_debug_show_queues(struct seq_file *m, struct kvm_vcpu *vcpu)
-{
-	struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
-	unsigned int i;
-
-	for (i = 0; i < KVMPPC_XIVE_Q_COUNT; i++) {
-		struct xive_q *q = &xc->queues[i];
-		u32 i0, i1, idx;
-
-		if (!q->qpage && !xc->esc_virq[i])
-			continue;
-
-		seq_printf(m, " [q%d]: ", i);
-
-		if (q->qpage) {
-			idx = q->idx;
-			i0 = be32_to_cpup(q->qpage + idx);
-			idx = (idx + 1) & q->msk;
-			i1 = be32_to_cpup(q->qpage + idx);
-			seq_printf(m, "T=%d %08x %08x...\n", q->toggle,
-				   i0, i1);
-		}
-		if (xc->esc_virq[i]) {
-			struct irq_data *d = irq_get_irq_data(xc->esc_virq[i]);
-			struct xive_irq_data *xd =
-				irq_data_get_irq_handler_data(d);
-			u64 pq = xive_vm_esb_load(xd, XIVE_ESB_GET);
-
-			seq_printf(m, "E:%c%c I(%d:%llx:%llx)",
-				   (pq & XIVE_ESB_VAL_P) ? 'P' : 'p',
-				   (pq & XIVE_ESB_VAL_Q) ? 'Q' : 'q',
-				   xc->esc_virq[i], pq, xd->eoi_page);
-			seq_puts(m, "\n");
-		}
-	}
-	return 0;
-}
 
 static int xive_debug_show(struct seq_file *m, void *private)
 {
@@ -2059,6 +1908,7 @@ static int xive_debug_show(struct seq_file *m, void *private)
 
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		struct kvmppc_xive_vcpu *xc = vcpu->arch.xive_vcpu;
+		unsigned int i;
 
 		if (!xc)
 			continue;
@@ -2068,8 +1918,33 @@ static int xive_debug_show(struct seq_file *m, void *private)
 			   xc->server_num, xc->cppr, xc->hw_cppr,
 			   xc->mfrr, xc->pending,
 			   xc->stat_rm_h_xirr, xc->stat_vm_h_xirr);
+		for (i = 0; i < KVMPPC_XIVE_Q_COUNT; i++) {
+			struct xive_q *q = &xc->queues[i];
+			u32 i0, i1, idx;
 
-		kvmppc_xive_debug_show_queues(m, vcpu);
+			if (!q->qpage && !xc->esc_virq[i])
+				continue;
+
+			seq_printf(m, " [q%d]: ", i);
+
+			if (q->qpage) {
+				idx = q->idx;
+				i0 = be32_to_cpup(q->qpage + idx);
+				idx = (idx + 1) & q->msk;
+				i1 = be32_to_cpup(q->qpage + idx);
+				seq_printf(m, "T=%d %08x %08x... \n", q->toggle, i0, i1);
+			}
+			if (xc->esc_virq[i]) {
+				struct irq_data *d = irq_get_irq_data(xc->esc_virq[i]);
+				struct xive_irq_data *xd = irq_data_get_irq_handler_data(d);
+				u64 pq = xive_vm_esb_load(xd, XIVE_ESB_GET);
+				seq_printf(m, "E:%c%c I(%d:%llx:%llx)",
+					   (pq & XIVE_ESB_VAL_P) ? 'P' : 'p',
+					   (pq & XIVE_ESB_VAL_Q) ? 'Q' : 'q',
+					   xc->esc_virq[i], pq, xd->eoi_page);
+				seq_printf(m, "\n");
+			}
+		}
 
 		t_rm_h_xirr += xc->stat_rm_h_xirr;
 		t_rm_h_ipoll += xc->stat_rm_h_ipoll;
@@ -2093,7 +1968,17 @@ static int xive_debug_show(struct seq_file *m, void *private)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(xive_debug);
+static int xive_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, xive_debug_show, inode->i_private);
+}
+
+static const struct file_operations xive_debug_fops = {
+	.open = xive_debug_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 
 static void xive_debugfs_init(struct kvmppc_xive *xive)
 {
@@ -2124,7 +2009,7 @@ struct kvm_device_ops kvm_xive_ops = {
 	.name = "kvm-xive",
 	.create = kvmppc_xive_create,
 	.init = kvmppc_xive_init,
-	.release = kvmppc_xive_release,
+	.destroy = kvmppc_xive_free,
 	.set_attr = xive_set_attr,
 	.get_attr = xive_get_attr,
 	.has_attr = xive_has_attr,

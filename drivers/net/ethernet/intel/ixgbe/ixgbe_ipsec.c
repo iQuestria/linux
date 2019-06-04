@@ -4,7 +4,6 @@
 #include "ixgbe.h"
 #include <net/xfrm.h>
 #include <crypto/aead.h>
-#include <linux/if_bridge.h>
 
 #define IXGBE_IPSEC_KEY_BITS  160
 static const char aes_gcm_name[] = "rfc4106(gcm(aes))";
@@ -694,8 +693,7 @@ static int ixgbe_ipsec_add_sa(struct xfrm_state *xs)
 	} else {
 		struct tx_sa tsa;
 
-		if (adapter->num_vfs &&
-		    adapter->bridge_mode != BRIDGE_MODE_VEPA)
+		if (adapter->num_vfs)
 			return -EOPNOTSUPP;
 
 		/* find the first unused index */
@@ -1065,13 +1063,11 @@ int ixgbe_ipsec_tx(struct ixgbe_ring *tx_ring,
 	struct ixgbe_adapter *adapter = netdev_priv(tx_ring->netdev);
 	struct ixgbe_ipsec *ipsec = adapter->ipsec;
 	struct xfrm_state *xs;
-	struct sec_path *sp;
 	struct tx_sa *tsa;
 
-	sp = skb_sec_path(first->skb);
-	if (unlikely(!sp->len)) {
+	if (unlikely(!first->skb->sp->len)) {
 		netdev_err(tx_ring->netdev, "%s: no xfrm state len = %d\n",
-			   __func__, sp->len);
+			   __func__, first->skb->sp->len);
 		return 0;
 	}
 
@@ -1161,7 +1157,6 @@ void ixgbe_ipsec_rx(struct ixgbe_ring *rx_ring,
 	struct xfrm_state *xs = NULL;
 	struct ipv6hdr *ip6 = NULL;
 	struct iphdr *ip4 = NULL;
-	struct sec_path *sp;
 	void *daddr;
 	__be32 spi;
 	u8 *c_hdr;
@@ -1201,12 +1196,12 @@ void ixgbe_ipsec_rx(struct ixgbe_ring *rx_ring,
 	if (unlikely(!xs))
 		return;
 
-	sp = secpath_set(skb);
-	if (unlikely(!sp))
+	skb->sp = secpath_dup(skb->sp);
+	if (unlikely(!skb->sp))
 		return;
 
-	sp->xvec[sp->len++] = xs;
-	sp->olen++;
+	skb->sp->xvec[skb->sp->len++] = xs;
+	skb->sp->olen++;
 	xo = xfrm_offload(skb);
 	xo->flags = CRYPTO_DONE;
 	xo->status = CRYPTO_SUCCESS;

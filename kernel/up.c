@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Uniprocessor-only support functions.  The counterpart to kernel/smp.c
  */

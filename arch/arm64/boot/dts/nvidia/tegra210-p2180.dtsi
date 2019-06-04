@@ -305,12 +305,6 @@
 		cpu@3 {
 			enable-method = "psci";
 		};
-
-		idle-states {
-			cpu-sleep {
-				status = "okay";
-			};
-		};
 	};
 
 	psci {

@@ -53,7 +53,7 @@ WB_WORK_REASON
 
 struct wb_writeback_work;
 
-DECLARE_EVENT_CLASS(writeback_page_template,
+TRACE_EVENT(writeback_dirty_page,
 
 	TP_PROTO(struct page *page, struct address_space *mapping),
 
@@ -77,20 +77,6 @@ DECLARE_EVENT_CLASS(writeback_page_template,
 		__entry->ino,
 		__entry->index
 	)
-);
-
-DEFINE_EVENT(writeback_page_template, writeback_dirty_page,
-
-	TP_PROTO(struct page *page, struct address_space *mapping),
-
-	TP_ARGS(page, mapping)
-);
-
-DEFINE_EVENT(writeback_page_template, wait_on_page_writeback,
-
-	TP_PROTO(struct page *page, struct address_space *mapping),
-
-	TP_ARGS(page, mapping)
 );
 
 DECLARE_EVENT_CLASS(writeback_dirty_inode_template,

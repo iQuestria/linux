@@ -28,7 +28,6 @@ typedef int (*event_attr_op)(struct perf_tool *tool,
 
 typedef int (*event_op2)(struct perf_session *session, union perf_event *event);
 typedef s64 (*event_op3)(struct perf_session *session, union perf_event *event);
-typedef int (*event_op4)(struct perf_session *session, union perf_event *event, u64 data);
 
 typedef int (*event_oe)(struct perf_tool *tool, union perf_event *event,
 			struct ordered_events *oe);
@@ -54,10 +53,7 @@ struct perf_tool {
 			itrace_start,
 			context_switch,
 			throttle,
-			unthrottle,
-			ksymbol,
-			bpf_event;
-
+			unthrottle;
 	event_attr_op	attr;
 	event_attr_op	event_update;
 	event_op2	tracing_data;
@@ -73,7 +69,6 @@ struct perf_tool {
 			stat,
 			stat_round,
 			feature;
-	event_op4	compressed;
 	event_op3	auxtrace;
 	bool		ordered_events;
 	bool		ordering_requires_timestamps;

@@ -27,6 +27,7 @@
 
 #include <linux/string.h>
 #include <linux/bitops.h>
+#include <drm/drmP.h>
 #include <drm/i915_drm.h>
 #include "i915_drv.h"
 
@@ -86,7 +87,7 @@ u32 i915_gem_fence_size(struct drm_i915_private *i915,
 	}
 
 	/* Previous chips need a power-of-two fence region when tiling */
-	if (IS_GEN(i915, 3))
+	if (IS_GEN3(i915))
 		ggtt_size = 1024*1024;
 	else
 		ggtt_size = 512*1024;
@@ -161,7 +162,7 @@ i915_tiling_ok(struct drm_i915_gem_object *obj,
 			return false;
 	}
 
-	if (IS_GEN(i915, 2) ||
+	if (IS_GEN2(i915) ||
 	    (tiling == I915_TILING_Y && HAS_128_BYTE_Y_TILING(i915)))
 		tile_width = 128;
 	else
@@ -301,11 +302,11 @@ i915_gem_object_set_tiling(struct drm_i915_gem_object *obj,
 	/* Try to preallocate memory required to save swizzling on put-pages */
 	if (i915_gem_object_needs_bit17_swizzle(obj)) {
 		if (!obj->bit_17) {
-			obj->bit_17 = bitmap_zalloc(obj->base.size >> PAGE_SHIFT,
-						    GFP_KERNEL);
+			obj->bit_17 = kcalloc(BITS_TO_LONGS(obj->base.size >> PAGE_SHIFT),
+					      sizeof(long), GFP_KERNEL);
 		}
 	} else {
-		bitmap_free(obj->bit_17);
+		kfree(obj->bit_17);
 		obj->bit_17 = NULL;
 	}
 

@@ -187,8 +187,8 @@ static int imx_mu_startup(struct mbox_chan *chan)
 		return 0;
 	}
 
-	ret = request_irq(priv->irq, imx_mu_isr, IRQF_SHARED |
-			  IRQF_NO_SUSPEND, cp->irq_desc, chan);
+	ret = request_irq(priv->irq, imx_mu_isr, IRQF_SHARED, cp->irq_desc,
+			  chan);
 	if (ret) {
 		dev_err(priv->dev,
 			"Unable to acquire IRQ %d\n", priv->irq);
@@ -264,6 +264,7 @@ static int imx_mu_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
+	struct resource *iomem;
 	struct imx_mu_priv *priv;
 	unsigned int i;
 	int ret;
@@ -274,7 +275,8 @@ static int imx_mu_probe(struct platform_device *pdev)
 
 	priv->dev = dev;
 
-	priv->base = devm_platform_ioremap_resource(pdev, 0);
+	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->base = devm_ioremap_resource(&pdev->dev, iomem);
 	if (IS_ERR(priv->base))
 		return PTR_ERR(priv->base);
 
@@ -322,13 +324,14 @@ static int imx_mu_probe(struct platform_device *pdev)
 
 	imx_mu_init_generic(priv);
 
-	return devm_mbox_controller_register(dev, &priv->mbox);
+	return mbox_controller_register(&priv->mbox);
 }
 
 static int imx_mu_remove(struct platform_device *pdev)
 {
 	struct imx_mu_priv *priv = platform_get_drvdata(pdev);
 
+	mbox_controller_unregister(&priv->mbox);
 	clk_disable_unprepare(priv->clk);
 
 	return 0;

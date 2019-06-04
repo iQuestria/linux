@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * net/sched/sch_netem.c	Network emulator
+ *
+ * 		This program is free software; you can redistribute it and/or
+ * 		modify it under the terms of the GNU General Public License
+ * 		as published by the Free Software Foundation; either version
+ * 		2 of the License.
  *
  *  		Many of the algorithms and ideas for this came from
  *		NIST Net which is not copyrighted.
@@ -72,10 +76,6 @@ struct disttable {
 struct netem_sched_data {
 	/* internal t(ime)fifo qdisc uses t_root and sch->limit */
 	struct rb_root t_root;
-
-	/* a linear queue; reduces rbtree rebalancing when jitter is low */
-	struct sk_buff	*t_head;
-	struct sk_buff	*t_tail;
 
 	/* optional qdisc for classful handling (NULL at netem init) */
 	struct Qdisc	*qdisc;
@@ -369,39 +369,26 @@ static void tfifo_reset(struct Qdisc *sch)
 		rb_erase(&skb->rbnode, &q->t_root);
 		rtnl_kfree_skbs(skb, skb);
 	}
-
-	rtnl_kfree_skbs(q->t_head, q->t_tail);
-	q->t_head = NULL;
-	q->t_tail = NULL;
 }
 
 static void tfifo_enqueue(struct sk_buff *nskb, struct Qdisc *sch)
 {
 	struct netem_sched_data *q = qdisc_priv(sch);
 	u64 tnext = netem_skb_cb(nskb)->time_to_send;
+	struct rb_node **p = &q->t_root.rb_node, *parent = NULL;
 
-	if (!q->t_tail || tnext >= netem_skb_cb(q->t_tail)->time_to_send) {
-		if (q->t_tail)
-			q->t_tail->next = nskb;
+	while (*p) {
+		struct sk_buff *skb;
+
+		parent = *p;
+		skb = rb_to_skb(parent);
+		if (tnext >= netem_skb_cb(skb)->time_to_send)
+			p = &parent->rb_right;
 		else
-			q->t_head = nskb;
-		q->t_tail = nskb;
-	} else {
-		struct rb_node **p = &q->t_root.rb_node, *parent = NULL;
-
-		while (*p) {
-			struct sk_buff *skb;
-
-			parent = *p;
-			skb = rb_to_skb(parent);
-			if (tnext >= netem_skb_cb(skb)->time_to_send)
-				p = &parent->rb_right;
-			else
-				p = &parent->rb_left;
-		}
-		rb_link_node(&nskb->rbnode, parent, p);
-		rb_insert_color(&nskb->rbnode, &q->t_root);
+			p = &parent->rb_left;
 	}
+	rb_link_node(&nskb->rbnode, parent, p);
+	rb_insert_color(&nskb->rbnode, &q->t_root);
 	sch->q.qlen++;
 }
 
@@ -443,10 +430,6 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	int nb = 0;
 	int count = 1;
 	int rc = NET_XMIT_SUCCESS;
-	int rc_drop = NET_XMIT_DROP;
-
-	/* Do not fool qdisc_drop_all() */
-	skb->prev = NULL;
 
 	/* Random duplication */
 	if (q->duplicate && q->duplicate >= get_crandom(&q->dup_cor))
@@ -483,7 +466,6 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		q->duplicate = 0;
 		rootq->enqueue(skb2, rootq, to_free);
 		q->duplicate = dupsave;
-		rc_drop = NET_XMIT_SUCCESS;
 	}
 
 	/*
@@ -496,7 +478,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		if (skb_is_gso(skb)) {
 			segs = netem_segment(skb, sch, to_free);
 			if (!segs)
-				return rc_drop;
+				return NET_XMIT_DROP;
 		} else {
 			segs = skb;
 		}
@@ -519,10 +501,8 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			1<<(prandom_u32() % 8);
 	}
 
-	if (unlikely(sch->q.qlen >= sch->limit)) {
-		qdisc_drop_all(skb, sch, to_free);
-		return rc_drop;
-	}
+	if (unlikely(sch->q.qlen >= sch->limit))
+		return qdisc_drop_all(skb, sch, to_free);
 
 	qdisc_qstats_backlog_inc(sch, skb);
 
@@ -550,16 +530,9 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				t_skb = skb_rb_last(&q->t_root);
 				t_last = netem_skb_cb(t_skb);
 				if (!last ||
-				    t_last->time_to_send > last->time_to_send)
+				    t_last->time_to_send > last->time_to_send) {
 					last = t_last;
-			}
-			if (q->t_tail) {
-				struct netem_skb_cb *t_last =
-					netem_skb_cb(q->t_tail);
-
-				if (!last ||
-				    t_last->time_to_send > last->time_to_send)
-					last = t_last;
+				}
 			}
 
 			if (last) {
@@ -638,38 +611,11 @@ static void get_slot_next(struct netem_sched_data *q, u64 now)
 	q->slot.bytes_left = q->slot_config.max_bytes;
 }
 
-static struct sk_buff *netem_peek(struct netem_sched_data *q)
-{
-	struct sk_buff *skb = skb_rb_first(&q->t_root);
-	u64 t1, t2;
-
-	if (!skb)
-		return q->t_head;
-	if (!q->t_head)
-		return skb;
-
-	t1 = netem_skb_cb(skb)->time_to_send;
-	t2 = netem_skb_cb(q->t_head)->time_to_send;
-	if (t1 < t2)
-		return skb;
-	return q->t_head;
-}
-
-static void netem_erase_head(struct netem_sched_data *q, struct sk_buff *skb)
-{
-	if (skb == q->t_head) {
-		q->t_head = skb->next;
-		if (!q->t_head)
-			q->t_tail = NULL;
-	} else {
-		rb_erase(&skb->rbnode, &q->t_root);
-	}
-}
-
 static struct sk_buff *netem_dequeue(struct Qdisc *sch)
 {
 	struct netem_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
+	struct rb_node *p;
 
 tfifo_dequeue:
 	skb = __qdisc_dequeue_head(&sch->q);
@@ -679,18 +625,20 @@ deliver:
 		qdisc_bstats_update(sch, skb);
 		return skb;
 	}
-	skb = netem_peek(q);
-	if (skb) {
+	p = rb_first(&q->t_root);
+	if (p) {
 		u64 time_to_send;
 		u64 now = ktime_get_ns();
+
+		skb = rb_to_skb(p);
 
 		/* if more time remaining? */
 		time_to_send = netem_skb_cb(skb)->time_to_send;
 		if (q->slot.slot_next && q->slot.slot_next < time_to_send)
 			get_slot_next(q, now);
 
-		if (time_to_send <= now && q->slot.slot_next <= now) {
-			netem_erase_head(q, skb);
+		if (time_to_send <= now &&  q->slot.slot_next <= now) {
+			rb_erase(p, &q->t_root);
 			sch->q.qlen--;
 			qdisc_qstats_backlog_dec(sch, skb);
 			skb->next = NULL;
@@ -931,9 +879,8 @@ static int parse_attr(struct nlattr *tb[], int maxtype, struct nlattr *nla,
 	}
 
 	if (nested_len >= nla_attr_size(0))
-		return nla_parse_deprecated(tb, maxtype,
-					    nla_data(nla) + NLA_ALIGN(len),
-					    nested_len, policy, NULL);
+		return nla_parse(tb, maxtype, nla_data(nla) + NLA_ALIGN(len),
+				 nested_len, policy, NULL);
 
 	memset(tb, 0, sizeof(struct nlattr *) * (maxtype + 1));
 	return 0;
@@ -1076,7 +1023,7 @@ static int dump_loss_model(const struct netem_sched_data *q,
 {
 	struct nlattr *nest;
 
-	nest = nla_nest_start_noflag(skb, TCA_NETEM_LOSS);
+	nest = nla_nest_start(skb, TCA_NETEM_LOSS);
 	if (nest == NULL)
 		goto nla_put_failure;
 

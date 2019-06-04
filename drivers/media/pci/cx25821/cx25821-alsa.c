@@ -120,7 +120,7 @@ module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "enable debug messages");
 
 /****************************************************************************
-			Module specific functions
+			Module specific funtions
  ****************************************************************************/
 /* Constants taken from cx88-reg.h */
 #define AUD_INT_DN_RISCI1       (1 <<  0)

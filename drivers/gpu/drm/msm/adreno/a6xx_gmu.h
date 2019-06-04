@@ -27,6 +27,9 @@ struct a6xx_gmu_bo {
 /* the GMU is coming up for the first time or back from a power collapse */
 #define GMU_COLD_BOOT 1
 
+/* The GMU is being soft reset after a fault */
+#define GMU_RESET 2
+
 /*
  * These define the level of control that the GMU has - the higher the number
  * the more things that the GMU hardware controls on its own.
@@ -49,10 +52,10 @@ struct a6xx_gmu {
 	int hfi_irq;
 	int gmu_irq;
 
+	struct regulator *gx;
+
 	struct iommu_domain *domain;
 	u64 uncached_iova_base;
-
-	struct device *gxpd;
 
 	int idle_level;
 
@@ -75,7 +78,7 @@ struct a6xx_gmu {
 
 	struct a6xx_hfi_queue queues[2];
 
-	bool hung;
+	struct tasklet_struct hfi_tasklet;
 };
 
 static inline u32 gmu_read(struct a6xx_gmu *gmu, u32 offset)
@@ -160,8 +163,5 @@ enum a6xx_gmu_oob_state {
 void a6xx_hfi_init(struct a6xx_gmu *gmu);
 int a6xx_hfi_start(struct a6xx_gmu *gmu, int boot_state);
 void a6xx_hfi_stop(struct a6xx_gmu *gmu);
-
-bool a6xx_gmu_gx_is_on(struct a6xx_gmu *gmu);
-bool a6xx_gmu_sptprac_is_on(struct a6xx_gmu *gmu);
 
 #endif

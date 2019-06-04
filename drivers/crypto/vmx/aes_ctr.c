@@ -23,10 +23,9 @@
 #include <linux/err.h>
 #include <linux/crypto.h>
 #include <linux/delay.h>
-#include <asm/simd.h>
+#include <linux/hardirq.h>
 #include <asm/switch_to.h>
 #include <crypto/aes.h>
-#include <crypto/internal/simd.h>
 #include <crypto/scatterwalk.h>
 #include <crypto/skcipher.h>
 
@@ -84,9 +83,8 @@ static int p8_aes_ctr_setkey(struct crypto_tfm *tfm, const u8 *key,
 	pagefault_enable();
 	preempt_enable();
 
-	ret |= crypto_sync_skcipher_setkey(ctx->fallback, key, keylen);
-
-	return ret ? -EINVAL : 0;
+	ret += crypto_sync_skcipher_setkey(ctx->fallback, key, keylen);
+	return ret;
 }
 
 static void p8_aes_ctr_final(struct p8_aes_ctr_ctx *ctx,
@@ -120,7 +118,7 @@ static int p8_aes_ctr_crypt(struct blkcipher_desc *desc,
 	struct p8_aes_ctr_ctx *ctx =
 		crypto_tfm_ctx(crypto_blkcipher_tfm(desc->tfm));
 
-	if (!crypto_simd_usable()) {
+	if (in_interrupt()) {
 		SYNC_SKCIPHER_REQUEST_ON_STACK(req, ctx->fallback);
 		skcipher_request_set_sync_tfm(req, ctx->fallback);
 		skcipher_request_set_callback(req, desc->flags, NULL, NULL);

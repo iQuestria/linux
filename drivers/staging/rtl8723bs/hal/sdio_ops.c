@@ -425,9 +425,12 @@ static u32 sdio_read_port(
 )
 {
 	struct adapter *adapter;
-	struct sdio_data *psdio;
+	PSDIO_DATA psdio;
 	struct hal_com_data *hal;
 	u32 oldcnt;
+#ifdef SDIO_DYNAMIC_ALLOC_MEM
+	u8 *oldmem;
+#endif
 	s32 err;
 
 
@@ -443,6 +446,13 @@ static u32 sdio_read_port(
 /* 	cnt = sdio_align_size(cnt); */
 
 	err = _sd_read(intfhdl, addr, cnt, mem);
+
+#ifdef SDIO_DYNAMIC_ALLOC_MEM
+	if ((oldcnt != cnt) && (oldmem)) {
+		memcpy(oldmem, mem, oldcnt);
+		kfree(mem);
+	}
+#endif
 
 	if (err)
 		return _FAIL;
@@ -473,7 +483,7 @@ static u32 sdio_write_port(
 )
 {
 	struct adapter *adapter;
-	struct sdio_data *psdio;
+	PSDIO_DATA psdio;
 	s32 err;
 	struct xmit_buf *xmitbuf = (struct xmit_buf *)mem;
 
@@ -550,7 +560,7 @@ static s32 _sdio_local_read(
 	n = RND4(cnt);
 	tmpbuf = rtw_malloc(n);
 	if (!tmpbuf)
-		return -1;
+		return (-1);
 
 	err = _sd_read(intfhdl, addr, n, tmpbuf);
 	if (!err)
@@ -591,7 +601,7 @@ s32 sdio_local_read(
 	n = RND4(cnt);
 	tmpbuf = rtw_malloc(n);
 	if (!tmpbuf)
-		return -1;
+		return (-1);
 
 	err = sd_read(intfhdl, addr, n, tmpbuf);
 	if (!err)
@@ -636,7 +646,7 @@ s32 sdio_local_write(
 
 	tmpbuf = rtw_malloc(cnt);
 	if (!tmpbuf)
-		return -1;
+		return (-1);
 
 	memcpy(tmpbuf, buf, cnt);
 
@@ -1013,7 +1023,7 @@ void sd_int_dpc(struct adapter *adapter)
 		u8 freepage[4];
 
 		_sdio_local_read(adapter, SDIO_REG_FREE_TXPG, 4, freepage);
-		complete(&(adapter->xmitpriv.xmit_comp));
+		up(&(adapter->xmitpriv.xmit_sema));
 	}
 
 	if (hal->sdio_hisr & SDIO_HISR_CPWM1) {
@@ -1207,7 +1217,7 @@ u8 RecvOnePkt(struct adapter *adapter, u32 size)
 {
 	struct recv_buf *recvbuf;
 	struct dvobj_priv *sddev;
-	struct sdio_data *psdio;
+	PSDIO_DATA psdio_data;
 	struct sdio_func *func;
 
 	u8 res = false;

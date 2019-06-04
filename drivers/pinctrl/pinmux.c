@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Core driver for the pin muxing portions of the pin control subsystem
  *
@@ -9,6 +8,8 @@
  * Author: Linus Walleij <linus.walleij@linaro.org>
  *
  * Copyright (C) 2012 NVIDIA CORPORATION. All rights reserved.
+ *
+ * License terms: GNU General Public License (GPL) version 2
  */
 #define pr_fmt(fmt) "pinmux core: " fmt
 
@@ -643,16 +644,37 @@ void pinmux_show_setting(struct seq_file *s,
 		   setting->data.mux.func);
 }
 
-DEFINE_SHOW_ATTRIBUTE(pinmux_functions);
-DEFINE_SHOW_ATTRIBUTE(pinmux_pins);
+static int pinmux_functions_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, pinmux_functions_show, inode->i_private);
+}
+
+static int pinmux_pins_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, pinmux_pins_show, inode->i_private);
+}
+
+static const struct file_operations pinmux_functions_ops = {
+	.open		= pinmux_functions_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static const struct file_operations pinmux_pins_ops = {
+	.open		= pinmux_pins_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 
 void pinmux_init_device_debugfs(struct dentry *devroot,
 			 struct pinctrl_dev *pctldev)
 {
 	debugfs_create_file("pinmux-functions", S_IFREG | S_IRUGO,
-			    devroot, pctldev, &pinmux_functions_fops);
+			    devroot, pctldev, &pinmux_functions_ops);
 	debugfs_create_file("pinmux-pins", S_IFREG | S_IRUGO,
-			    devroot, pctldev, &pinmux_pins_fops);
+			    devroot, pctldev, &pinmux_pins_ops);
 }
 
 #endif /* CONFIG_DEBUG_FS */

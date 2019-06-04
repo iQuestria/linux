@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 static struct resword {
 	const char *name;
 	int token;

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * The "user cache".
  *
@@ -186,7 +185,7 @@ struct user_struct *alloc_uid(kuid_t uid)
 	if (!up) {
 		new = kmem_cache_zalloc(uid_cachep, GFP_KERNEL);
 		if (!new)
-			return NULL;
+			goto out_unlock;
 
 		new->uid = uid;
 		refcount_set(&new->__count, 1);
@@ -200,6 +199,8 @@ struct user_struct *alloc_uid(kuid_t uid)
 		spin_lock_irq(&uidhash_lock);
 		up = uid_hash_find(uid, hashent);
 		if (up) {
+			key_put(new->uid_keyring);
+			key_put(new->session_keyring);
 			kmem_cache_free(uid_cachep, new);
 		} else {
 			uid_hash_insert(new, hashent);
@@ -209,6 +210,9 @@ struct user_struct *alloc_uid(kuid_t uid)
 	}
 
 	return up;
+
+out_unlock:
+	return NULL;
 }
 
 static int __init uid_cache_init(void)

@@ -13,17 +13,12 @@
 #include <linux/list.h>
 #include <linux/errno.h>
 #include <linux/skbuff.h>
-#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>
-#include <linux/rcupdate.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/sch_generic.h>
-
-static LIST_HEAD(taprio_list);
-static DEFINE_SPINLOCK(taprio_list_lock);
 
 #define TAPRIO_ALL_GATES_OPEN -1
 
@@ -42,87 +37,23 @@ struct sched_entry {
 	u8 command;
 };
 
-struct sched_gate_list {
-	struct rcu_head rcu;
-	struct list_head entries;
-	size_t num_entries;
-	ktime_t cycle_close_time;
-	s64 cycle_time;
-	s64 cycle_time_extension;
-	s64 base_time;
-};
-
 struct taprio_sched {
 	struct Qdisc **qdiscs;
 	struct Qdisc *root;
+	s64 base_time;
 	int clockid;
-	atomic64_t picos_per_byte; /* Using picoseconds because for 10Gbps+
-				    * speeds it's sub-nanoseconds per byte
-				    */
+	int picos_per_byte; /* Using picoseconds because for 10Gbps+
+			     * speeds it's sub-nanoseconds per byte
+			     */
+	size_t num_entries;
 
 	/* Protects the update side of the RCU protected current_entry */
 	spinlock_t current_entry_lock;
 	struct sched_entry __rcu *current_entry;
-	struct sched_gate_list __rcu *oper_sched;
-	struct sched_gate_list __rcu *admin_sched;
+	struct list_head entries;
 	ktime_t (*get_time)(void);
 	struct hrtimer advance_timer;
-	struct list_head taprio_list;
 };
-
-static ktime_t sched_base_time(const struct sched_gate_list *sched)
-{
-	if (!sched)
-		return KTIME_MAX;
-
-	return ns_to_ktime(sched->base_time);
-}
-
-static void taprio_free_sched_cb(struct rcu_head *head)
-{
-	struct sched_gate_list *sched = container_of(head, struct sched_gate_list, rcu);
-	struct sched_entry *entry, *n;
-
-	if (!sched)
-		return;
-
-	list_for_each_entry_safe(entry, n, &sched->entries, list) {
-		list_del(&entry->list);
-		kfree(entry);
-	}
-
-	kfree(sched);
-}
-
-static void switch_schedules(struct taprio_sched *q,
-			     struct sched_gate_list **admin,
-			     struct sched_gate_list **oper)
-{
-	rcu_assign_pointer(q->oper_sched, *admin);
-	rcu_assign_pointer(q->admin_sched, NULL);
-
-	if (*oper)
-		call_rcu(&(*oper)->rcu, taprio_free_sched_cb);
-
-	*oper = *admin;
-	*admin = NULL;
-}
-
-static ktime_t get_cycle_time(struct sched_gate_list *sched)
-{
-	struct sched_entry *entry;
-	ktime_t cycle = 0;
-
-	if (sched->cycle_time != 0)
-		return sched->cycle_time;
-
-	list_for_each_entry(entry, &sched->entries, list)
-		cycle = ktime_add_ns(cycle, entry->interval);
-
-	sched->cycle_time = cycle;
-
-	return cycle;
-}
 
 static int taprio_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			  struct sk_buff **to_free)
@@ -154,7 +85,7 @@ static struct sk_buff *taprio_peek(struct Qdisc *sch)
 
 	rcu_read_lock();
 	entry = rcu_dereference(q->current_entry);
-	gate_mask = entry ? entry->gate_mask : TAPRIO_ALL_GATES_OPEN;
+	gate_mask = entry ? entry->gate_mask : -1;
 	rcu_read_unlock();
 
 	if (!gate_mask)
@@ -176,7 +107,7 @@ static struct sk_buff *taprio_peek(struct Qdisc *sch)
 		tc = netdev_get_prio_tc_map(dev, prio);
 
 		if (!(gate_mask & BIT(tc)))
-			continue;
+			return NULL;
 
 		return skb;
 	}
@@ -186,29 +117,17 @@ static struct sk_buff *taprio_peek(struct Qdisc *sch)
 
 static inline int length_to_duration(struct taprio_sched *q, int len)
 {
-	return div_u64(len * atomic64_read(&q->picos_per_byte), 1000);
-}
-
-static void taprio_set_budget(struct taprio_sched *q, struct sched_entry *entry)
-{
-	atomic_set(&entry->budget,
-		   div64_u64((u64)entry->interval * 1000,
-			     atomic64_read(&q->picos_per_byte)));
+	return (len * q->picos_per_byte) / 1000;
 }
 
 static struct sk_buff *taprio_dequeue(struct Qdisc *sch)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sk_buff *skb = NULL;
 	struct sched_entry *entry;
+	struct sk_buff *skb;
 	u32 gate_mask;
 	int i;
-
-	if (atomic64_read(&q->picos_per_byte) == -1) {
-		WARN_ONCE(1, "taprio: dequeue() called with unknown picos per byte.");
-		return NULL;
-	}
 
 	rcu_read_lock();
 	entry = rcu_dereference(q->current_entry);
@@ -218,9 +137,10 @@ static struct sk_buff *taprio_dequeue(struct Qdisc *sch)
 	 * "AdminGateSates"
 	 */
 	gate_mask = entry ? entry->gate_mask : TAPRIO_ALL_GATES_OPEN;
+	rcu_read_unlock();
 
 	if (!gate_mask)
-		goto done;
+		return NULL;
 
 	for (i = 0; i < dev->num_tx_queues; i++) {
 		struct Qdisc *child = q->qdiscs[i];
@@ -251,81 +171,39 @@ static struct sk_buff *taprio_dequeue(struct Qdisc *sch)
 		 */
 		if (gate_mask != TAPRIO_ALL_GATES_OPEN &&
 		    ktime_after(guard, entry->close_time))
-			continue;
+			return NULL;
 
 		/* ... and no budget. */
 		if (gate_mask != TAPRIO_ALL_GATES_OPEN &&
 		    atomic_sub_return(len, &entry->budget) < 0)
-			continue;
+			return NULL;
 
 		skb = child->ops->dequeue(child);
 		if (unlikely(!skb))
-			goto done;
+			return NULL;
 
 		qdisc_bstats_update(sch, skb);
 		qdisc_qstats_backlog_dec(sch, skb);
 		sch->q.qlen--;
 
-		goto done;
+		return skb;
 	}
 
-done:
-	rcu_read_unlock();
-
-	return skb;
+	return NULL;
 }
 
-static bool should_restart_cycle(const struct sched_gate_list *oper,
+static bool should_restart_cycle(const struct taprio_sched *q,
 				 const struct sched_entry *entry)
 {
-	if (list_is_last(&entry->list, &oper->entries))
-		return true;
+	WARN_ON(!entry);
 
-	if (ktime_compare(entry->close_time, oper->cycle_close_time) == 0)
-		return true;
-
-	return false;
-}
-
-static bool should_change_schedules(const struct sched_gate_list *admin,
-				    const struct sched_gate_list *oper,
-				    ktime_t close_time)
-{
-	ktime_t next_base_time, extension_time;
-
-	if (!admin)
-		return false;
-
-	next_base_time = sched_base_time(admin);
-
-	/* This is the simple case, the close_time would fall after
-	 * the next schedule base_time.
-	 */
-	if (ktime_compare(next_base_time, close_time) <= 0)
-		return true;
-
-	/* This is the cycle_time_extension case, if the close_time
-	 * plus the amount that can be extended would fall after the
-	 * next schedule base_time, we can extend the current schedule
-	 * for that amount.
-	 */
-	extension_time = ktime_add_ns(close_time, oper->cycle_time_extension);
-
-	/* FIXME: the IEEE 802.1Q-2018 Specification isn't clear about
-	 * how precisely the extension should be made. So after
-	 * conformance testing, this logic may change.
-	 */
-	if (ktime_compare(next_base_time, extension_time) <= 0)
-		return true;
-
-	return false;
+	return list_is_last(&entry->list, &q->entries);
 }
 
 static enum hrtimer_restart advance_sched(struct hrtimer *timer)
 {
 	struct taprio_sched *q = container_of(timer, struct taprio_sched,
 					      advance_timer);
-	struct sched_gate_list *oper, *admin;
 	struct sched_entry *entry, *next;
 	struct Qdisc *sch = q->root;
 	ktime_t close_time;
@@ -333,49 +211,29 @@ static enum hrtimer_restart advance_sched(struct hrtimer *timer)
 	spin_lock(&q->current_entry_lock);
 	entry = rcu_dereference_protected(q->current_entry,
 					  lockdep_is_held(&q->current_entry_lock));
-	oper = rcu_dereference_protected(q->oper_sched,
-					 lockdep_is_held(&q->current_entry_lock));
-	admin = rcu_dereference_protected(q->admin_sched,
-					  lockdep_is_held(&q->current_entry_lock));
 
-	if (!oper)
-		switch_schedules(q, &admin, &oper);
-
-	/* This can happen in two cases: 1. this is the very first run
-	 * of this function (i.e. we weren't running any schedule
-	 * previously); 2. The previous schedule just ended. The first
-	 * entry of all schedules are pre-calculated during the
-	 * schedule initialization.
+	/* This is the case that it's the first time that the schedule
+	 * runs, so it only happens once per schedule. The first entry
+	 * is pre-calculated during the schedule initialization.
 	 */
-	if (unlikely(!entry || entry->close_time == oper->base_time)) {
-		next = list_first_entry(&oper->entries, struct sched_entry,
+	if (unlikely(!entry)) {
+		next = list_first_entry(&q->entries, struct sched_entry,
 					list);
 		close_time = next->close_time;
 		goto first_run;
 	}
 
-	if (should_restart_cycle(oper, entry)) {
-		next = list_first_entry(&oper->entries, struct sched_entry,
+	if (should_restart_cycle(q, entry))
+		next = list_first_entry(&q->entries, struct sched_entry,
 					list);
-		oper->cycle_close_time = ktime_add_ns(oper->cycle_close_time,
-						      oper->cycle_time);
-	} else {
+	else
 		next = list_next_entry(entry, list);
-	}
 
 	close_time = ktime_add_ns(entry->close_time, next->interval);
-	close_time = min_t(ktime_t, close_time, oper->cycle_close_time);
-
-	if (should_change_schedules(admin, oper, close_time)) {
-		/* Set things so the next time this runs, the new
-		 * schedule runs.
-		 */
-		close_time = sched_base_time(admin);
-		switch_schedules(q, &admin, &oper);
-	}
 
 	next->close_time = close_time;
-	taprio_set_budget(q, next);
+	atomic_set(&next->budget,
+		   (next->interval * 1000) / q->picos_per_byte);
 
 first_run:
 	rcu_assign_pointer(q->current_entry, next);
@@ -405,12 +263,10 @@ static const struct nla_policy taprio_policy[TCA_TAPRIO_ATTR_MAX + 1] = {
 	[TCA_TAPRIO_ATTR_PRIOMAP]	       = {
 		.len = sizeof(struct tc_mqprio_qopt)
 	},
-	[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST]           = { .type = NLA_NESTED },
-	[TCA_TAPRIO_ATTR_SCHED_BASE_TIME]            = { .type = NLA_S64 },
-	[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY]         = { .type = NLA_NESTED },
-	[TCA_TAPRIO_ATTR_SCHED_CLOCKID]              = { .type = NLA_S32 },
-	[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME]           = { .type = NLA_S64 },
-	[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME_EXTENSION] = { .type = NLA_S64 },
+	[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST]     = { .type = NLA_NESTED },
+	[TCA_TAPRIO_ATTR_SCHED_BASE_TIME]      = { .type = NLA_S64 },
+	[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY]   = { .type = NLA_NESTED },
+	[TCA_TAPRIO_ATTR_SCHED_CLOCKID]        = { .type = NLA_S32 },
 };
 
 static int fill_sched_entry(struct nlattr **tb, struct sched_entry *entry,
@@ -446,8 +302,8 @@ static int parse_sched_entry(struct nlattr *n, struct sched_entry *entry,
 	struct nlattr *tb[TCA_TAPRIO_SCHED_ENTRY_MAX + 1] = { };
 	int err;
 
-	err = nla_parse_nested_deprecated(tb, TCA_TAPRIO_SCHED_ENTRY_MAX, n,
-					  entry_policy, NULL);
+	err = nla_parse_nested(tb, TCA_TAPRIO_SCHED_ENTRY_MAX, n,
+			       entry_policy, NULL);
 	if (err < 0) {
 		NL_SET_ERR_MSG(extack, "Could not parse nested entry");
 		return -EINVAL;
@@ -458,8 +314,70 @@ static int parse_sched_entry(struct nlattr *n, struct sched_entry *entry,
 	return fill_sched_entry(tb, entry, extack);
 }
 
+/* Returns the number of entries in case of success */
+static int parse_sched_single_entry(struct nlattr *n,
+				    struct taprio_sched *q,
+				    struct netlink_ext_ack *extack)
+{
+	struct nlattr *tb_entry[TCA_TAPRIO_SCHED_ENTRY_MAX + 1] = { };
+	struct nlattr *tb_list[TCA_TAPRIO_SCHED_MAX + 1] = { };
+	struct sched_entry *entry;
+	bool found = false;
+	u32 index;
+	int err;
+
+	err = nla_parse_nested(tb_list, TCA_TAPRIO_SCHED_MAX,
+			       n, entry_list_policy, NULL);
+	if (err < 0) {
+		NL_SET_ERR_MSG(extack, "Could not parse nested entry");
+		return -EINVAL;
+	}
+
+	if (!tb_list[TCA_TAPRIO_SCHED_ENTRY]) {
+		NL_SET_ERR_MSG(extack, "Single-entry must include an entry");
+		return -EINVAL;
+	}
+
+	err = nla_parse_nested(tb_entry, TCA_TAPRIO_SCHED_ENTRY_MAX,
+			       tb_list[TCA_TAPRIO_SCHED_ENTRY],
+			       entry_policy, NULL);
+	if (err < 0) {
+		NL_SET_ERR_MSG(extack, "Could not parse nested entry");
+		return -EINVAL;
+	}
+
+	if (!tb_entry[TCA_TAPRIO_SCHED_ENTRY_INDEX]) {
+		NL_SET_ERR_MSG(extack, "Entry must specify an index\n");
+		return -EINVAL;
+	}
+
+	index = nla_get_u32(tb_entry[TCA_TAPRIO_SCHED_ENTRY_INDEX]);
+	if (index >= q->num_entries) {
+		NL_SET_ERR_MSG(extack, "Index for single entry exceeds number of entries in schedule");
+		return -EINVAL;
+	}
+
+	list_for_each_entry(entry, &q->entries, list) {
+		if (entry->index == index) {
+			found = true;
+			break;
+		}
+	}
+
+	if (!found) {
+		NL_SET_ERR_MSG(extack, "Could not find entry");
+		return -ENOENT;
+	}
+
+	err = fill_sched_entry(tb_entry, entry, extack);
+	if (err < 0)
+		return err;
+
+	return q->num_entries;
+}
+
 static int parse_sched_list(struct nlattr *list,
-			    struct sched_gate_list *sched,
+			    struct taprio_sched *q,
 			    struct netlink_ext_ack *extack)
 {
 	struct nlattr *n;
@@ -489,42 +407,64 @@ static int parse_sched_list(struct nlattr *list,
 			return err;
 		}
 
-		list_add_tail(&entry->list, &sched->entries);
+		list_add_tail(&entry->list, &q->entries);
 		i++;
 	}
 
-	sched->num_entries = i;
+	q->num_entries = i;
 
 	return i;
 }
 
-static int parse_taprio_schedule(struct nlattr **tb,
-				 struct sched_gate_list *new,
-				 struct netlink_ext_ack *extack)
+/* Returns the number of entries in case of success */
+static int parse_taprio_opt(struct nlattr **tb, struct taprio_sched *q,
+			    struct netlink_ext_ack *extack)
 {
 	int err = 0;
+	int clockid;
 
-	if (tb[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY]) {
-		NL_SET_ERR_MSG(extack, "Adding a single entry is not supported");
-		return -ENOTSUPP;
-	}
+	if (tb[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST] &&
+	    tb[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY])
+		return -EINVAL;
+
+	if (tb[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY] && q->num_entries == 0)
+		return -EINVAL;
+
+	if (q->clockid == -1 && !tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID])
+		return -EINVAL;
 
 	if (tb[TCA_TAPRIO_ATTR_SCHED_BASE_TIME])
-		new->base_time = nla_get_s64(tb[TCA_TAPRIO_ATTR_SCHED_BASE_TIME]);
+		q->base_time = nla_get_s64(
+			tb[TCA_TAPRIO_ATTR_SCHED_BASE_TIME]);
 
-	if (tb[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME_EXTENSION])
-		new->cycle_time_extension = nla_get_s64(tb[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME_EXTENSION]);
+	if (tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID]) {
+		clockid = nla_get_s32(tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID]);
 
-	if (tb[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME])
-		new->cycle_time = nla_get_s64(tb[TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME]);
+		/* We only support static clockids and we don't allow
+		 * for it to be modified after the first init.
+		 */
+		if (clockid < 0 || (q->clockid != -1 && q->clockid != clockid))
+			return -EINVAL;
+
+		q->clockid = clockid;
+	}
 
 	if (tb[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST])
 		err = parse_sched_list(
-			tb[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST], new, extack);
-	if (err < 0)
-		return err;
+			tb[TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST], q, extack);
+	else if (tb[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY])
+		err = parse_sched_single_entry(
+			tb[TCA_TAPRIO_ATTR_SCHED_SINGLE_ENTRY], q, extack);
 
-	return 0;
+	/* parse_sched_* return the number of entries in the schedule,
+	 * a schedule with zero entries is an error.
+	 */
+	if (err == 0) {
+		NL_SET_ERR_MSG(extack, "The schedule should contain at least one entry");
+		return -EINVAL;
+	}
+
+	return err;
 }
 
 static int taprio_parse_mqprio_opt(struct net_device *dev,
@@ -533,16 +473,10 @@ static int taprio_parse_mqprio_opt(struct net_device *dev,
 {
 	int i, j;
 
-	if (!qopt && !dev->num_tc) {
+	if (!qopt) {
 		NL_SET_ERR_MSG(extack, "'mqprio' configuration is necessary");
 		return -EINVAL;
 	}
-
-	/* If num_tc is already set, it means that the user already
-	 * configured the mqprio part
-	 */
-	if (dev->num_tc)
-		return 0;
 
 	/* Verify num_tc is not out of max range */
 	if (qopt->num_tc > TC_MAX_QUEUE) {
@@ -589,141 +523,76 @@ static int taprio_parse_mqprio_opt(struct net_device *dev,
 	return 0;
 }
 
-static int taprio_get_start_time(struct Qdisc *sch,
-				 struct sched_gate_list *sched,
-				 ktime_t *start)
+static ktime_t taprio_get_start_time(struct Qdisc *sch)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
+	struct sched_entry *entry;
 	ktime_t now, base, cycle;
 	s64 n;
 
-	base = sched_base_time(sched);
+	base = ns_to_ktime(q->base_time);
+	cycle = 0;
+
+	/* Calculate the cycle_time, by summing all the intervals.
+	 */
+	list_for_each_entry(entry, &q->entries, list)
+		cycle = ktime_add_ns(cycle, entry->interval);
+
+	if (!cycle)
+		return base;
+
 	now = q->get_time();
 
-	if (ktime_after(base, now)) {
-		*start = base;
-		return 0;
-	}
-
-	cycle = get_cycle_time(sched);
-
-	/* The qdisc is expected to have at least one sched_entry.  Moreover,
-	 * any entry must have 'interval' > 0. Thus if the cycle time is zero,
-	 * something went really wrong. In that case, we should warn about this
-	 * inconsistent state and return error.
-	 */
-	if (WARN_ON(!cycle))
-		return -EFAULT;
+	if (ktime_after(base, now))
+		return base;
 
 	/* Schedule the start time for the beginning of the next
 	 * cycle.
 	 */
 	n = div64_s64(ktime_sub_ns(now, base), cycle);
-	*start = ktime_add_ns(base, (n + 1) * cycle);
-	return 0;
+
+	return ktime_add_ns(base, (n + 1) * cycle);
 }
 
-static void setup_first_close_time(struct taprio_sched *q,
-				   struct sched_gate_list *sched, ktime_t base)
-{
-	struct sched_entry *first;
-	ktime_t cycle;
-
-	first = list_first_entry(&sched->entries,
-				 struct sched_entry, list);
-
-	cycle = get_cycle_time(sched);
-
-	/* FIXME: find a better place to do this */
-	sched->cycle_close_time = ktime_add_ns(base, cycle);
-
-	first->close_time = ktime_add_ns(base, first->interval);
-	taprio_set_budget(q, first);
-	rcu_assign_pointer(q->current_entry, NULL);
-}
-
-static void taprio_start_sched(struct Qdisc *sch,
-			       ktime_t start, struct sched_gate_list *new)
+static void taprio_start_sched(struct Qdisc *sch, ktime_t start)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
-	ktime_t expires;
+	struct sched_entry *first;
+	unsigned long flags;
 
-	expires = hrtimer_get_expires(&q->advance_timer);
-	if (expires == 0)
-		expires = KTIME_MAX;
+	spin_lock_irqsave(&q->current_entry_lock, flags);
 
-	/* If the new schedule starts before the next expiration, we
-	 * reprogram it to the earliest one, so we change the admin
-	 * schedule to the operational one at the right time.
-	 */
-	start = min_t(ktime_t, start, expires);
+	first = list_first_entry(&q->entries, struct sched_entry,
+				 list);
+
+	first->close_time = ktime_add_ns(start, first->interval);
+	atomic_set(&first->budget,
+		   (first->interval * 1000) / q->picos_per_byte);
+	rcu_assign_pointer(q->current_entry, NULL);
+
+	spin_unlock_irqrestore(&q->current_entry_lock, flags);
 
 	hrtimer_start(&q->advance_timer, start, HRTIMER_MODE_ABS);
-}
-
-static void taprio_set_picos_per_byte(struct net_device *dev,
-				      struct taprio_sched *q)
-{
-	struct ethtool_link_ksettings ecmd;
-	int picos_per_byte = -1;
-
-	if (!__ethtool_get_link_ksettings(dev, &ecmd) &&
-	    ecmd.base.speed != SPEED_UNKNOWN)
-		picos_per_byte = div64_s64(NSEC_PER_SEC * 1000LL * 8,
-					   ecmd.base.speed * 1000 * 1000);
-
-	atomic64_set(&q->picos_per_byte, picos_per_byte);
-	netdev_dbg(dev, "taprio: set %s's picos_per_byte to: %lld, linkspeed: %d\n",
-		   dev->name, (long long)atomic64_read(&q->picos_per_byte),
-		   ecmd.base.speed);
-}
-
-static int taprio_dev_notifier(struct notifier_block *nb, unsigned long event,
-			       void *ptr)
-{
-	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
-	struct net_device *qdev;
-	struct taprio_sched *q;
-	bool found = false;
-
-	ASSERT_RTNL();
-
-	if (event != NETDEV_UP && event != NETDEV_CHANGE)
-		return NOTIFY_DONE;
-
-	spin_lock(&taprio_list_lock);
-	list_for_each_entry(q, &taprio_list, taprio_list) {
-		qdev = qdisc_dev(q->root);
-		if (qdev == dev) {
-			found = true;
-			break;
-		}
-	}
-	spin_unlock(&taprio_list_lock);
-
-	if (found)
-		taprio_set_picos_per_byte(dev, q);
-
-	return NOTIFY_DONE;
 }
 
 static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 			 struct netlink_ext_ack *extack)
 {
 	struct nlattr *tb[TCA_TAPRIO_ATTR_MAX + 1] = { };
-	struct sched_gate_list *oper, *admin, *new_admin;
 	struct taprio_sched *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
 	struct tc_mqprio_qopt *mqprio = NULL;
-	int i, err, clockid;
-	unsigned long flags;
+	struct ethtool_link_ksettings ecmd;
+	int i, err, size;
+	s64 link_speed;
 	ktime_t start;
 
-	err = nla_parse_nested_deprecated(tb, TCA_TAPRIO_ATTR_MAX, opt,
-					  taprio_policy, extack);
+	err = nla_parse_nested(tb, TCA_TAPRIO_ATTR_MAX, opt,
+			       taprio_policy, extack);
 	if (err < 0)
 		return err;
 
+	err = -EINVAL;
 	if (tb[TCA_TAPRIO_ATTR_PRIOMAP])
 		mqprio = nla_data(tb[TCA_TAPRIO_ATTR_PRIOMAP]);
 
@@ -731,78 +600,13 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 	if (err < 0)
 		return err;
 
-	new_admin = kzalloc(sizeof(*new_admin), GFP_KERNEL);
-	if (!new_admin) {
-		NL_SET_ERR_MSG(extack, "Not enough memory for a new schedule");
-		return -ENOMEM;
-	}
-	INIT_LIST_HEAD(&new_admin->entries);
+	/* A schedule with less than one entry is an error */
+	size = parse_taprio_opt(tb, q, extack);
+	if (size < 0)
+		return size;
 
-	rcu_read_lock();
-	oper = rcu_dereference(q->oper_sched);
-	admin = rcu_dereference(q->admin_sched);
-	rcu_read_unlock();
-
-	if (mqprio && (oper || admin)) {
-		NL_SET_ERR_MSG(extack, "Changing the traffic mapping of a running schedule is not supported");
-		err = -ENOTSUPP;
-		goto free_sched;
-	}
-
-	err = parse_taprio_schedule(tb, new_admin, extack);
-	if (err < 0)
-		goto free_sched;
-
-	if (new_admin->num_entries == 0) {
-		NL_SET_ERR_MSG(extack, "There should be at least one entry in the schedule");
-		err = -EINVAL;
-		goto free_sched;
-	}
-
-	if (tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID]) {
-		clockid = nla_get_s32(tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID]);
-
-		/* We only support static clockids and we don't allow
-		 * for it to be modified after the first init.
-		 */
-		if (clockid < 0 ||
-		    (q->clockid != -1 && q->clockid != clockid)) {
-			NL_SET_ERR_MSG(extack, "Changing the 'clockid' of a running schedule is not supported");
-			err = -ENOTSUPP;
-			goto free_sched;
-		}
-
-		q->clockid = clockid;
-	}
-
-	if (q->clockid == -1 && !tb[TCA_TAPRIO_ATTR_SCHED_CLOCKID]) {
-		NL_SET_ERR_MSG(extack, "Specifying a 'clockid' is mandatory");
-		err = -EINVAL;
-		goto free_sched;
-	}
-
-	taprio_set_picos_per_byte(dev, q);
-
-	/* Protects against enqueue()/dequeue() */
-	spin_lock_bh(qdisc_lock(sch));
-
-	if (!hrtimer_active(&q->advance_timer)) {
-		hrtimer_init(&q->advance_timer, q->clockid, HRTIMER_MODE_ABS);
-		q->advance_timer.function = advance_sched;
-	}
-
-	if (mqprio) {
-		netdev_set_num_tc(dev, mqprio->num_tc);
-		for (i = 0; i < mqprio->num_tc; i++)
-			netdev_set_tc_queue(dev, i,
-					    mqprio->count[i],
-					    mqprio->offset[i]);
-
-		/* Always use supplied priority mappings */
-		for (i = 0; i < TC_BITMASK + 1; i++)
-			netdev_set_prio_tc_map(dev, i,
-					       mqprio->prio_tc_map[i]);
-	}
+	hrtimer_init(&q->advance_timer, q->clockid, HRTIMER_MODE_ABS);
+	q->advance_timer.function = advance_sched;
 
 	switch (q->clockid) {
 	case CLOCK_REALTIME:
@@ -818,51 +622,64 @@ static int taprio_change(struct Qdisc *sch, struct nlattr *opt,
 		q->get_time = ktime_get_clocktai;
 		break;
 	default:
-		NL_SET_ERR_MSG(extack, "Invalid 'clockid'");
-		err = -EINVAL;
-		goto unlock;
+		return -ENOTSUPP;
 	}
 
-	err = taprio_get_start_time(sch, new_admin, &start);
-	if (err < 0) {
-		NL_SET_ERR_MSG(extack, "Internal error: failed get start time");
-		goto unlock;
+	for (i = 0; i < dev->num_tx_queues; i++) {
+		struct netdev_queue *dev_queue;
+		struct Qdisc *qdisc;
+
+		dev_queue = netdev_get_tx_queue(dev, i);
+		qdisc = qdisc_create_dflt(dev_queue,
+					  &pfifo_qdisc_ops,
+					  TC_H_MAKE(TC_H_MAJ(sch->handle),
+						    TC_H_MIN(i + 1)),
+					  extack);
+		if (!qdisc)
+			return -ENOMEM;
+
+		if (i < dev->real_num_tx_queues)
+			qdisc_hash_add(qdisc, false);
+
+		q->qdiscs[i] = qdisc;
 	}
 
-	setup_first_close_time(q, new_admin, start);
+	if (mqprio) {
+		netdev_set_num_tc(dev, mqprio->num_tc);
+		for (i = 0; i < mqprio->num_tc; i++)
+			netdev_set_tc_queue(dev, i,
+					    mqprio->count[i],
+					    mqprio->offset[i]);
 
-	/* Protects against advance_sched() */
-	spin_lock_irqsave(&q->current_entry_lock, flags);
+		/* Always use supplied priority mappings */
+		for (i = 0; i < TC_BITMASK + 1; i++)
+			netdev_set_prio_tc_map(dev, i,
+					       mqprio->prio_tc_map[i]);
+	}
 
-	taprio_start_sched(sch, start, new_admin);
+	if (!__ethtool_get_link_ksettings(dev, &ecmd))
+		link_speed = ecmd.base.speed;
+	else
+		link_speed = SPEED_1000;
 
-	rcu_assign_pointer(q->admin_sched, new_admin);
-	if (admin)
-		call_rcu(&admin->rcu, taprio_free_sched_cb);
-	new_admin = NULL;
+	q->picos_per_byte = div64_s64(NSEC_PER_SEC * 1000LL * 8,
+				      link_speed * 1000 * 1000);
 
-	spin_unlock_irqrestore(&q->current_entry_lock, flags);
+	start = taprio_get_start_time(sch);
+	if (!start)
+		return 0;
 
-	err = 0;
+	taprio_start_sched(sch, start);
 
-unlock:
-	spin_unlock_bh(qdisc_lock(sch));
-
-free_sched:
-	kfree(new_admin);
-
-	return err;
+	return 0;
 }
 
 static void taprio_destroy(struct Qdisc *sch)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
+	struct sched_entry *entry, *n;
 	unsigned int i;
-
-	spin_lock(&taprio_list_lock);
-	list_del(&q->taprio_list);
-	spin_unlock(&taprio_list_lock);
 
 	hrtimer_cancel(&q->advance_timer);
 
@@ -876,11 +693,10 @@ static void taprio_destroy(struct Qdisc *sch)
 
 	netdev_set_num_tc(dev, 0);
 
-	if (q->oper_sched)
-		call_rcu(&q->oper_sched->rcu, taprio_free_sched_cb);
-
-	if (q->admin_sched)
-		call_rcu(&q->admin_sched->rcu, taprio_free_sched_cb);
+	list_for_each_entry_safe(entry, n, &q->entries, list) {
+		list_del(&entry->list);
+		kfree(entry);
+	}
 }
 
 static int taprio_init(struct Qdisc *sch, struct nlattr *opt,
@@ -888,12 +704,12 @@ static int taprio_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct taprio_sched *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	int i;
 
+	INIT_LIST_HEAD(&q->entries);
 	spin_lock_init(&q->current_entry_lock);
 
+	/* We may overwrite the configuration later */
 	hrtimer_init(&q->advance_timer, CLOCK_TAI, HRTIMER_MODE_ABS);
-	q->advance_timer.function = advance_sched;
 
 	q->root = sch;
 
@@ -918,29 +734,6 @@ static int taprio_init(struct Qdisc *sch, struct nlattr *opt,
 
 	if (!opt)
 		return -EINVAL;
-
-	spin_lock(&taprio_list_lock);
-	list_add(&q->taprio_list, &taprio_list);
-	spin_unlock(&taprio_list_lock);
-
-	for (i = 0; i < dev->num_tx_queues; i++) {
-		struct netdev_queue *dev_queue;
-		struct Qdisc *qdisc;
-
-		dev_queue = netdev_get_tx_queue(dev, i);
-		qdisc = qdisc_create_dflt(dev_queue,
-					  &pfifo_qdisc_ops,
-					  TC_H_MAKE(TC_H_MAJ(sch->handle),
-						    TC_H_MIN(i + 1)),
-					  extack);
-		if (!qdisc)
-			return -ENOMEM;
-
-		if (i < dev->real_num_tx_queues)
-			qdisc_hash_add(qdisc, false);
-
-		q->qdiscs[i] = qdisc;
-	}
 
 	return taprio_change(sch, opt, extack);
 }
@@ -988,7 +781,7 @@ static int dump_entry(struct sk_buff *msg,
 {
 	struct nlattr *item;
 
-	item = nla_nest_start_noflag(msg, TCA_TAPRIO_SCHED_ENTRY);
+	item = nla_nest_start(msg, TCA_TAPRIO_SCHED_ENTRY);
 	if (!item)
 		return -ENOSPC;
 
@@ -1013,54 +806,14 @@ nla_put_failure:
 	return -1;
 }
 
-static int dump_schedule(struct sk_buff *msg,
-			 const struct sched_gate_list *root)
-{
-	struct nlattr *entry_list;
-	struct sched_entry *entry;
-
-	if (nla_put_s64(msg, TCA_TAPRIO_ATTR_SCHED_BASE_TIME,
-			root->base_time, TCA_TAPRIO_PAD))
-		return -1;
-
-	if (nla_put_s64(msg, TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME,
-			root->cycle_time, TCA_TAPRIO_PAD))
-		return -1;
-
-	if (nla_put_s64(msg, TCA_TAPRIO_ATTR_SCHED_CYCLE_TIME_EXTENSION,
-			root->cycle_time_extension, TCA_TAPRIO_PAD))
-		return -1;
-
-	entry_list = nla_nest_start_noflag(msg,
-					   TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST);
-	if (!entry_list)
-		goto error_nest;
-
-	list_for_each_entry(entry, &root->entries, list) {
-		if (dump_entry(msg, entry) < 0)
-			goto error_nest;
-	}
-
-	nla_nest_end(msg, entry_list);
-	return 0;
-
-error_nest:
-	nla_nest_cancel(msg, entry_list);
-	return -1;
-}
-
 static int taprio_dump(struct Qdisc *sch, struct sk_buff *skb)
 {
 	struct taprio_sched *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
-	struct sched_gate_list *oper, *admin;
 	struct tc_mqprio_qopt opt = { 0 };
-	struct nlattr *nest, *sched_nest;
+	struct nlattr *nest, *entry_list;
+	struct sched_entry *entry;
 	unsigned int i;
-
-	rcu_read_lock();
-	oper = rcu_dereference(q->oper_sched);
-	admin = rcu_dereference(q->admin_sched);
 
 	opt.num_tc = netdev_get_num_tc(dev);
 	memcpy(opt.prio_tc_map, dev->prio_tc_map, sizeof(opt.prio_tc_map));
@@ -1070,45 +823,36 @@ static int taprio_dump(struct Qdisc *sch, struct sk_buff *skb)
 		opt.offset[i] = dev->tc_to_txq[i].offset;
 	}
 
-	nest = nla_nest_start_noflag(skb, TCA_OPTIONS);
+	nest = nla_nest_start(skb, TCA_OPTIONS);
 	if (!nest)
-		goto start_error;
+		return -ENOSPC;
 
 	if (nla_put(skb, TCA_TAPRIO_ATTR_PRIOMAP, sizeof(opt), &opt))
+		goto options_error;
+
+	if (nla_put_s64(skb, TCA_TAPRIO_ATTR_SCHED_BASE_TIME,
+			q->base_time, TCA_TAPRIO_PAD))
 		goto options_error;
 
 	if (nla_put_s32(skb, TCA_TAPRIO_ATTR_SCHED_CLOCKID, q->clockid))
 		goto options_error;
 
-	if (oper && dump_schedule(skb, oper))
+	entry_list = nla_nest_start(skb, TCA_TAPRIO_ATTR_SCHED_ENTRY_LIST);
+	if (!entry_list)
 		goto options_error;
 
-	if (!admin)
-		goto done;
+	list_for_each_entry(entry, &q->entries, list) {
+		if (dump_entry(skb, entry) < 0)
+			goto options_error;
+	}
 
-	sched_nest = nla_nest_start_noflag(skb, TCA_TAPRIO_ATTR_ADMIN_SCHED);
-	if (!sched_nest)
-		goto options_error;
-
-	if (dump_schedule(skb, admin))
-		goto admin_error;
-
-	nla_nest_end(skb, sched_nest);
-
-done:
-	rcu_read_unlock();
+	nla_nest_end(skb, entry_list);
 
 	return nla_nest_end(skb, nest);
 
-admin_error:
-	nla_nest_cancel(skb, sched_nest);
-
 options_error:
 	nla_nest_cancel(skb, nest);
-
-start_error:
-	rcu_read_unlock();
-	return -ENOSPC;
+	return -1;
 }
 
 static struct Qdisc *taprio_leaf(struct Qdisc *sch, unsigned long cl)
@@ -1151,7 +895,7 @@ static int taprio_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 
 	sch = dev_queue->qdisc_sleeping;
 	if (gnet_stats_copy_basic(&sch->running, d, NULL, &sch->bstats) < 0 ||
-	    qdisc_qstats_copy(d, sch) < 0)
+	    gnet_stats_copy_queue(d, NULL, &sch->qstats, sch->q.qlen) < 0)
 		return -1;
 	return 0;
 }
@@ -1195,7 +939,6 @@ static struct Qdisc_ops taprio_qdisc_ops __read_mostly = {
 	.id		= "taprio",
 	.priv_size	= sizeof(struct taprio_sched),
 	.init		= taprio_init,
-	.change		= taprio_change,
 	.destroy	= taprio_destroy,
 	.peek		= taprio_peek,
 	.dequeue	= taprio_dequeue,
@@ -1204,24 +947,14 @@ static struct Qdisc_ops taprio_qdisc_ops __read_mostly = {
 	.owner		= THIS_MODULE,
 };
 
-static struct notifier_block taprio_device_notifier = {
-	.notifier_call = taprio_dev_notifier,
-};
-
 static int __init taprio_module_init(void)
 {
-	int err = register_netdevice_notifier(&taprio_device_notifier);
-
-	if (err)
-		return err;
-
 	return register_qdisc(&taprio_qdisc_ops);
 }
 
 static void __exit taprio_module_exit(void)
 {
 	unregister_qdisc(&taprio_qdisc_ops);
-	unregister_netdevice_notifier(&taprio_device_notifier);
 }
 
 module_init(taprio_module_init);

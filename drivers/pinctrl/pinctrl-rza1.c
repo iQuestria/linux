@@ -620,7 +620,14 @@ static void rza1_pin_reset(struct rza1_port *port, unsigned int pin)
 static inline int rza1_pin_get_direction(struct rza1_port *port,
 					 unsigned int pin)
 {
-	return !!rza1_get_bit(port, RZA1_PM_REG, pin);
+	unsigned long irqflags;
+	int input;
+
+	spin_lock_irqsave(&port->lock, irqflags);
+	input = rza1_get_bit(port, RZA1_PM_REG, pin);
+	spin_unlock_irqrestore(&port->lock, irqflags);
+
+	return !!input;
 }
 
 /**
@@ -664,7 +671,14 @@ static inline void rza1_pin_set(struct rza1_port *port, unsigned int pin,
 
 static inline int rza1_pin_get(struct rza1_port *port, unsigned int pin)
 {
-	return rza1_get_bit(port, RZA1_PPR_REG, pin);
+	unsigned long irqflags;
+	int val;
+
+	spin_lock_irqsave(&port->lock, irqflags);
+	val = rza1_get_bit(port, RZA1_PPR_REG, pin);
+	spin_unlock_irqrestore(&port->lock, irqflags);
+
+	return val;
 }
 
 /**
@@ -1211,9 +1225,6 @@ static int rza1_parse_gpiochip(struct rza1_pinctrl *rza1_pctl,
 	chip->base	= -1;
 	chip->label	= devm_kasprintf(rza1_pctl->dev, GFP_KERNEL, "%pOFn",
 					 np);
-	if (!chip->label)
-		return -ENOMEM;
-
 	chip->ngpio	= of_args.args[2];
 	chip->of_node	= np;
 	chip->parent	= rza1_pctl->dev;
@@ -1315,8 +1326,6 @@ static int rza1_pinctrl_register(struct rza1_pinctrl *rza1_pctl)
 		pins[i].number = i;
 		pins[i].name = devm_kasprintf(rza1_pctl->dev, GFP_KERNEL,
 					      "P%u-%u", port, pin);
-		if (!pins[i].name)
-			return -ENOMEM;
 
 		if (i % RZA1_PINS_PER_PORT == 0) {
 			/*

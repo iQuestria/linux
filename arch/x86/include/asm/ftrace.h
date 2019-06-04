@@ -3,10 +3,12 @@
 #define _ASM_X86_FTRACE_H
 
 #ifdef CONFIG_FUNCTION_TRACER
-#ifndef CC_USING_FENTRY
-# error Compiler does not support fentry?
-#endif
+#ifdef CC_USING_FENTRY
 # define MCOUNT_ADDR		((unsigned long)(__fentry__))
+#else
+# define MCOUNT_ADDR		((unsigned long)(mcount))
+# define HAVE_FUNCTION_GRAPH_FP_TEST
+#endif
 #define MCOUNT_INSN_SIZE	5 /* sizeof mcount call */
 
 #ifdef CONFIG_DYNAMIC_FTRACE

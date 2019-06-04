@@ -18,7 +18,6 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
 #include <linux/of_device.h>

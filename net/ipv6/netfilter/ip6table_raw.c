@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * IPv6 raw table, a port of the IPv4 raw table to IPv6
  *

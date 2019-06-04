@@ -33,7 +33,7 @@ int mgag200_framebuffer_init(struct drm_device *dev,
 			     struct drm_gem_object *obj)
 {
 	int ret;
-
+	
 	drm_helper_mode_fill_fb_struct(dev, &gfb->base, mode_cmd);
 	gfb->obj = obj;
 	ret = drm_framebuffer_init(dev, &gfb->base, &mga_fb_funcs);
@@ -318,9 +318,13 @@ int mgag200_dumb_create(struct drm_file *file,
 
 static void mgag200_bo_unref(struct mgag200_bo **bo)
 {
+	struct ttm_buffer_object *tbo;
+
 	if ((*bo) == NULL)
 		return;
-	ttm_bo_put(&((*bo)->bo));
+
+	tbo = &((*bo)->bo);
+	ttm_bo_unref(&tbo);
 	*bo = NULL;
 }
 

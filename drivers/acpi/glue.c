@@ -296,7 +296,7 @@ int acpi_unbind_one(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(acpi_unbind_one);
 
-static int acpi_device_notify(struct device *dev)
+static int acpi_platform_notify(struct device *dev)
 {
 	struct acpi_bus_type *type = acpi_get_bus_type(dev);
 	struct acpi_device *adev;
@@ -343,7 +343,7 @@ static int acpi_device_notify(struct device *dev)
 	return ret;
 }
 
-static int acpi_device_notify_remove(struct device *dev)
+static int acpi_platform_notify_remove(struct device *dev)
 {
 	struct acpi_device *adev = ACPI_COMPANION(dev);
 	struct acpi_bus_type *type;
@@ -361,17 +361,12 @@ static int acpi_device_notify_remove(struct device *dev)
 	return 0;
 }
 
-int acpi_platform_notify(struct device *dev, enum kobject_action action)
+void __init init_acpi_device_notify(void)
 {
-	switch (action) {
-	case KOBJ_ADD:
-		acpi_device_notify(dev);
-		break;
-	case KOBJ_REMOVE:
-		acpi_device_notify_remove(dev);
-		break;
-	default:
-		break;
+	if (platform_notify || platform_notify_remove) {
+		printk(KERN_ERR PREFIX "Can't use platform_notify\n");
+		return;
 	}
-	return 0;
+	platform_notify = acpi_platform_notify;
+	platform_notify_remove = acpi_platform_notify_remove;
 }

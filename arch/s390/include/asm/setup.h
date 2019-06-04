@@ -12,10 +12,7 @@
 #define EP_OFFSET		0x10008
 #define EP_STRING		"S390EP"
 #define PARMAREA		0x10400
-#define EARLY_SCCB_OFFSET	0x11000
-#define HEAD_END		0x12000
-
-#define EARLY_SCCB_SIZE		PAGE_SIZE
+#define PARMAREA_END		0x11000
 
 /*
  * Machine features detected in early.c
@@ -67,16 +64,6 @@
 #define OLDMEM_BASE	(*(unsigned long *)  (OLDMEM_BASE_OFFSET))
 #define OLDMEM_SIZE	(*(unsigned long *)  (OLDMEM_SIZE_OFFSET))
 #define COMMAND_LINE	((char *)	     (COMMAND_LINE_OFFSET))
-
-struct parmarea {
-	unsigned long ipl_device;			/* 0x10400 */
-	unsigned long initrd_start;			/* 0x10408 */
-	unsigned long initrd_size;			/* 0x10410 */
-	unsigned long oldmem_base;			/* 0x10418 */
-	unsigned long oldmem_size;			/* 0x10420 */
-	char pad1[0x10480 - 0x10428];			/* 0x10428 - 0x10480 */
-	char command_line[ARCH_COMMAND_LINE_SIZE];	/* 0x10480 */
-};
 
 extern int noexec_disabled;
 extern int memory_end_set;
@@ -146,12 +133,6 @@ void cmma_init_nodat(void);
 extern void (*_machine_restart)(char *command);
 extern void (*_machine_halt)(void);
 extern void (*_machine_power_off)(void);
-
-extern unsigned long __kaslr_offset;
-static inline unsigned long kaslr_offset(void)
-{
-	return __kaslr_offset;
-}
 
 #else /* __ASSEMBLY__ */
 

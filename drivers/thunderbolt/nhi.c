@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Thunderbolt driver - NHI driver
  *
@@ -28,7 +27,8 @@
  * use this ring for anything else.
  */
 #define RING_E2E_UNUSED_HOPID	2
-#define RING_FIRST_USABLE_HOPID	TB_PATH_MIN_HOPID
+/* HopIDs 0-7 are reserved by the Thunderbolt protocol */
+#define RING_FIRST_USABLE_HOPID	8
 
 /*
  * Minimal number of vectors when we use MSI-X. Two for control channel

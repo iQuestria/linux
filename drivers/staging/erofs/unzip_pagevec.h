@@ -43,7 +43,7 @@ struct z_erofs_pagevec_ctor {
 static inline void z_erofs_pagevec_ctor_exit(struct z_erofs_pagevec_ctor *ctor,
 					     bool atomic)
 {
-	if (!ctor->curr)
+	if (ctor->curr == NULL)
 		return;
 
 	if (atomic)
@@ -59,7 +59,7 @@ z_erofs_pagevec_ctor_next_page(struct z_erofs_pagevec_ctor *ctor,
 	unsigned index;
 
 	/* keep away from occupied pages */
-	if (ctor->next)
+	if (ctor->next != NULL)
 		return ctor->next;
 
 	for (index = 0; index < nr; ++index) {
@@ -121,7 +121,7 @@ z_erofs_pagevec_ctor_enqueue(struct z_erofs_pagevec_ctor *ctor,
 			     bool *occupied)
 {
 	*occupied = false;
-	if (unlikely(!ctor->next && type))
+	if (unlikely(ctor->next == NULL && type))
 		if (ctor->index + 1 == ctor->nr)
 			return false;
 
@@ -150,7 +150,7 @@ z_erofs_pagevec_ctor_dequeue(struct z_erofs_pagevec_ctor *ctor,
 	erofs_vtptr_t t;
 
 	if (unlikely(ctor->index >= ctor->nr)) {
-		DBG_BUGON(!ctor->next);
+		BUG_ON(ctor->next == NULL);
 		z_erofs_pagevec_ctor_pagedown(ctor, true);
 	}
 

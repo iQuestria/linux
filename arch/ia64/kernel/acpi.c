@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  acpi.c - Architecture-Specific Low-Level ACPI Support
  *
@@ -13,6 +12,24 @@
  *  Copyright (C) 2001 Takayoshi Kochi <t-kochi@bq.jp.nec.com>
  *  Copyright (C) 2002 Erich Focht <efocht@ess.nec.de>
  *  Copyright (C) 2004 Ashok Raj <ashok.raj@intel.com>
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
 #include <linux/module.h>
@@ -160,7 +177,7 @@ struct acpi_table_madt *acpi_madt __initdata;
 static u8 has_8259;
 
 static int __init
-acpi_parse_lapic_addr_ovr(union acpi_subtable_headers * header,
+acpi_parse_lapic_addr_ovr(struct acpi_subtable_header * header,
 			  const unsigned long end)
 {
 	struct acpi_madt_local_apic_override *lapic;
@@ -178,7 +195,7 @@ acpi_parse_lapic_addr_ovr(union acpi_subtable_headers * header,
 }
 
 static int __init
-acpi_parse_lsapic(union acpi_subtable_headers *header, const unsigned long end)
+acpi_parse_lsapic(struct acpi_subtable_header * header, const unsigned long end)
 {
 	struct acpi_madt_local_sapic *lsapic;
 
@@ -199,7 +216,7 @@ acpi_parse_lsapic(union acpi_subtable_headers *header, const unsigned long end)
 }
 
 static int __init
-acpi_parse_lapic_nmi(union acpi_subtable_headers * header, const unsigned long end)
+acpi_parse_lapic_nmi(struct acpi_subtable_header * header, const unsigned long end)
 {
 	struct acpi_madt_local_apic_nmi *lacpi_nmi;
 
@@ -213,7 +230,7 @@ acpi_parse_lapic_nmi(union acpi_subtable_headers * header, const unsigned long e
 }
 
 static int __init
-acpi_parse_iosapic(union acpi_subtable_headers * header, const unsigned long end)
+acpi_parse_iosapic(struct acpi_subtable_header * header, const unsigned long end)
 {
 	struct acpi_madt_io_sapic *iosapic;
 
@@ -228,7 +245,7 @@ acpi_parse_iosapic(union acpi_subtable_headers * header, const unsigned long end
 static unsigned int __initdata acpi_madt_rev;
 
 static int __init
-acpi_parse_plat_int_src(union acpi_subtable_headers * header,
+acpi_parse_plat_int_src(struct acpi_subtable_header * header,
 			const unsigned long end)
 {
 	struct acpi_madt_interrupt_source *plintsrc;
@@ -312,7 +329,7 @@ unsigned int get_cpei_target_cpu(void)
 }
 
 static int __init
-acpi_parse_int_src_ovr(union acpi_subtable_headers * header,
+acpi_parse_int_src_ovr(struct acpi_subtable_header * header,
 		       const unsigned long end)
 {
 	struct acpi_madt_interrupt_override *p;
@@ -333,7 +350,7 @@ acpi_parse_int_src_ovr(union acpi_subtable_headers * header,
 }
 
 static int __init
-acpi_parse_nmi_src(union acpi_subtable_headers * header, const unsigned long end)
+acpi_parse_nmi_src(struct acpi_subtable_header * header, const unsigned long end)
 {
 	struct acpi_madt_nmi_source *nmi_src;
 

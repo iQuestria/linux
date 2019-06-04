@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menuconfig LIBNVDIMM
 	tristate "NVDIMM (Non-Volatile Memory Device) Support"
 	depends on PHYS_ADDR_T_64BIT
@@ -112,10 +111,5 @@ config OF_PMEM
 	  device-tree.
 
 	  Select Y if unsure.
-
-config NVDIMM_KEYS
-	def_bool y
-	depends on ENCRYPTED_KEYS
-	depends on (LIBNVDIMM=ENCRYPTED_KEYS) || LIBNVDIMM=m
 
 endif

@@ -124,9 +124,8 @@
 };
 
 &m_can1 {
-	pinctrl-names = "default", "sleep";
+	pinctrl-names = "default";
 	pinctrl-0 = <&m_can1_pins_a>;
-	pinctrl-1 = <&m_can1_sleep_pins_a>;
 	status = "okay";
 };
 
@@ -162,9 +161,6 @@
 };
 
 &timers2 {
-	/* spare dmas for other usage (un-delete to enable pwm capture) */
-	/delete-property/dmas;
-	/delete-property/dma-names;
 	status = "disabled";
 	pwm {
 		pinctrl-0 = <&pwm2_pins_a>;
@@ -177,8 +173,6 @@
 };
 
 &timers8 {
-	/delete-property/dmas;
-	/delete-property/dma-names;
 	status = "disabled";
 	pwm {
 		pinctrl-0 = <&pwm8_pins_a>;
@@ -191,8 +185,6 @@
 };
 
 &timers12 {
-	/delete-property/dmas;
-	/delete-property/dma-names;
 	status = "disabled";
 	pwm {
 		pinctrl-0 = <&pwm12_pins_a>;

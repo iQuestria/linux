@@ -16,8 +16,6 @@
 #ifndef __MT76_DMA_H
 #define __MT76_DMA_H
 
-#define DMA_DUMMY_DATA			((void *)~0)
-
 #define MT_RING_SIZE			0x10
 
 #define MT_DMA_CTL_SD_LEN1		GENMASK(13, 0)
@@ -56,7 +54,7 @@ enum mt76_mcu_evt_type {
 	EVT_EVENT_DFS_DETECT_RSP,
 };
 
-void mt76_dma_attach(struct mt76_dev *dev);
+int mt76_dma_attach(struct mt76_dev *dev);
 void mt76_dma_cleanup(struct mt76_dev *dev);
 
 #endif

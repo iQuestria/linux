@@ -157,7 +157,8 @@ static int usage_id_cmp(const void *p1, const void *p2)
 static ssize_t enable_sensor_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
-	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
 
 	return sprintf(buf, "%d\n", sensor_inst->enable);
 }
@@ -236,7 +237,8 @@ static ssize_t enable_sensor_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
-	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
 	int value;
 	int ret = -EINVAL;
 
@@ -281,7 +283,8 @@ static const struct attribute_group enable_sensor_attr_group = {
 static ssize_t show_value(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
-	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
 	struct hid_sensor_hub_attribute_info *attribute;
 	int index, usage, field_index;
 	char name[HID_CUSTOM_NAME_LENGTH];
@@ -389,7 +392,8 @@ static ssize_t show_value(struct device *dev, struct device_attribute *attr,
 static ssize_t store_value(struct device *dev, struct device_attribute *attr,
 			   const char *buf, size_t count)
 {
-	struct hid_sensor_custom *sensor_inst = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct hid_sensor_custom *sensor_inst = platform_get_drvdata(pdev);
 	int index, field_index, usage;
 	char name[HID_CUSTOM_NAME_LENGTH];
 	int value;

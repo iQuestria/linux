@@ -455,11 +455,7 @@ static int dwc_eth_dwmac_probe(struct platform_device *pdev)
 	priv = data->probe(pdev, plat_dat, &stmmac_res);
 	if (IS_ERR(priv)) {
 		ret = PTR_ERR(priv);
-
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "failed to probe subdriver: %d\n",
-				ret);
-
+		dev_err(&pdev->dev, "failed to probe subdriver: %d\n", ret);
 		goto remove_config;
 	}
 

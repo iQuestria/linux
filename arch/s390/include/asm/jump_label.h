@@ -10,12 +10,6 @@
 #define JUMP_LABEL_NOP_SIZE 6
 #define JUMP_LABEL_NOP_OFFSET 2
 
-#if __GNUC__ < 9
-#define JUMP_LABEL_STATIC_KEY_CONSTRAINT "X"
-#else
-#define JUMP_LABEL_STATIC_KEY_CONSTRAINT "jdd"
-#endif
-
 /*
  * We use a brcl 0,2 instruction for jump labels at compile time so it
  * can be easily distinguished from a hotpatch generated instruction.
@@ -26,9 +20,9 @@ static inline bool arch_static_branch(struct static_key *key, bool branch)
 			  ".pushsection __jump_table,\"aw\"\n"
 			  ".balign	8\n"
 			  ".long	0b-.,%l[label]-.\n"
-			  ".quad	%0+%1-.\n"
+			  ".quad	%0-.\n"
 			  ".popsection\n"
-			  : : JUMP_LABEL_STATIC_KEY_CONSTRAINT (key), "i" (branch) : : label);
+			  : : "X" (&((char *)key)[branch]) : : label);
 	return false;
 label:
 	return true;
@@ -40,9 +34,9 @@ static inline bool arch_static_branch_jump(struct static_key *key, bool branch)
 			  ".pushsection __jump_table,\"aw\"\n"
 			  ".balign	8\n"
 			  ".long	0b-.,%l[label]-.\n"
-			  ".quad	%0+%1-.\n"
+			  ".quad	%0-.\n"
 			  ".popsection\n"
-			  : : JUMP_LABEL_STATIC_KEY_CONSTRAINT (key), "i" (branch) : : label);
+			  : : "X" (&((char *)key)[branch]) : : label);
 	return false;
 label:
 	return true;

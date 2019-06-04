@@ -17,7 +17,9 @@
  * University of Oslo, Norway.
  *
  * References:
- * RFC 8033: https://tools.ietf.org/html/rfc8033
+ * IETF draft submission: http://tools.ietf.org/html/draft-pan-aqm-pie-00
+ * IEEE  Conference on High Performance Switching and Routing 2013 :
+ * "PIE: A * Lightweight Control Scheme to Address the Bufferbloat Problem"
  */
 
 #include <linux/module.h>
@@ -29,9 +31,9 @@
 #include <net/pkt_sched.h>
 #include <net/inet_ecn.h>
 
-#define QUEUE_THRESHOLD 16384
+#define QUEUE_THRESHOLD 10000
 #define DQCOUNT_INVALID -1
-#define MAX_PROB 0xffffffffffffffff
+#define MAX_PROB  0xffffffff
 #define PIE_SCALE 8
 
 /* parameters used */
@@ -47,16 +49,14 @@ struct pie_params {
 
 /* variables used */
 struct pie_vars {
-	u64 prob;		/* probability but scaled by u64 limit. */
+	u32 prob;		/* probability but scaled by u32 limit. */
 	psched_time_t burst_time;
 	psched_time_t qdelay;
 	psched_time_t qdelay_old;
 	u64 dq_count;		/* measured in bytes */
 	psched_time_t dq_tstamp;	/* drain rate */
-	u64 accu_prob;		/* accumulated drop probability */
 	u32 avg_dq_rate;	/* bytes per pschedtime tick,scaled */
 	u32 qlen_old;		/* in bytes */
-	u8 accu_prob_overflows;	/* overflows of accu_prob */
 };
 
 /* statistics gathering */
@@ -81,9 +81,9 @@ static void pie_params_init(struct pie_params *params)
 {
 	params->alpha = 2;
 	params->beta = 20;
-	params->tupdate = usecs_to_jiffies(15 * USEC_PER_MSEC);	/* 15 ms */
+	params->tupdate = usecs_to_jiffies(30 * USEC_PER_MSEC);	/* 30 ms */
 	params->limit = 1000;	/* default of 1000 packets */
-	params->target = PSCHED_NS2TICKS(15 * NSEC_PER_MSEC);	/* 15 ms */
+	params->target = PSCHED_NS2TICKS(20 * NSEC_PER_MSEC);	/* 20 ms */
 	params->ecn = false;
 	params->bytemode = false;
 }
@@ -91,18 +91,16 @@ static void pie_params_init(struct pie_params *params)
 static void pie_vars_init(struct pie_vars *vars)
 {
 	vars->dq_count = DQCOUNT_INVALID;
-	vars->accu_prob = 0;
 	vars->avg_dq_rate = 0;
-	/* default of 150 ms in pschedtime */
-	vars->burst_time = PSCHED_NS2TICKS(150 * NSEC_PER_MSEC);
-	vars->accu_prob_overflows = 0;
+	/* default of 100 ms in pschedtime */
+	vars->burst_time = PSCHED_NS2TICKS(100 * NSEC_PER_MSEC);
 }
 
 static bool drop_early(struct Qdisc *sch, u32 packet_size)
 {
 	struct pie_sched_data *q = qdisc_priv(sch);
-	u64 rnd;
-	u64 local_prob = q->vars.prob;
+	u32 rnd;
+	u32 local_prob = q->vars.prob;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 
 	/* If there is still burst allowance left skip random early drop */
@@ -126,33 +124,13 @@ static bool drop_early(struct Qdisc *sch, u32 packet_size)
 	 * probablity. Smaller packets will have lower drop prob in this case
 	 */
 	if (q->params.bytemode && packet_size <= mtu)
-		local_prob = (u64)packet_size * div_u64(local_prob, mtu);
+		local_prob = (local_prob / mtu) * packet_size;
 	else
 		local_prob = q->vars.prob;
 
-	if (local_prob == 0) {
-		q->vars.accu_prob = 0;
-		q->vars.accu_prob_overflows = 0;
-	}
-
-	if (local_prob > MAX_PROB - q->vars.accu_prob)
-		q->vars.accu_prob_overflows++;
-
-	q->vars.accu_prob += local_prob;
-
-	if (q->vars.accu_prob_overflows == 0 &&
-	    q->vars.accu_prob < (MAX_PROB / 100) * 85)
-		return false;
-	if (q->vars.accu_prob_overflows == 8 &&
-	    q->vars.accu_prob >= MAX_PROB / 2)
+	rnd = prandom_u32();
+	if (rnd < local_prob)
 		return true;
-
-	prandom_bytes(&rnd, 8);
-	if (rnd < local_prob) {
-		q->vars.accu_prob = 0;
-		q->vars.accu_prob_overflows = 0;
-		return true;
-	}
 
 	return false;
 }
@@ -190,8 +168,6 @@ static int pie_qdisc_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 out:
 	q->stats.dropped++;
-	q->vars.accu_prob = 0;
-	q->vars.accu_prob_overflows = 0;
 	return qdisc_drop(skb, sch, to_free);
 }
 
@@ -216,8 +192,7 @@ static int pie_change(struct Qdisc *sch, struct nlattr *opt,
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested_deprecated(tb, TCA_PIE_MAX, opt, pie_policy,
-					  NULL);
+	err = nla_parse_nested(tb, TCA_PIE_MAX, opt, pie_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -342,10 +317,9 @@ static void calculate_probability(struct Qdisc *sch)
 	u32 qlen = sch->qstats.backlog;	/* queue size in bytes */
 	psched_time_t qdelay = 0;	/* in pschedtime */
 	psched_time_t qdelay_old = q->vars.qdelay;	/* in pschedtime */
-	s64 delta = 0;		/* determines the change in probability */
-	u64 oldprob;
-	u64 alpha, beta;
-	u32 power;
+	s32 delta = 0;		/* determines the change in probability */
+	u32 oldprob;
+	u32 alpha, beta;
 	bool update_prob = true;
 
 	q->vars.qdelay_old = q->vars.qdelay;
@@ -365,36 +339,38 @@ static void calculate_probability(struct Qdisc *sch)
 	 * value for alpha as 0.125. In this implementation, we use values 0-32
 	 * passed from user space to represent this. Also, alpha and beta have
 	 * unit of HZ and need to be scaled before they can used to update
-	 * probability. alpha/beta are updated locally below by scaling down
-	 * by 16 to come to 0-2 range.
+	 * probability. alpha/beta are updated locally below by 1) scaling them
+	 * appropriately 2) scaling down by 16 to come to 0-2 range.
+	 * Please see paper for details.
+	 *
+	 * We scale alpha and beta differently depending on whether we are in
+	 * light, medium or high dropping mode.
 	 */
-	alpha = ((u64)q->params.alpha * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 4;
-	beta = ((u64)q->params.beta * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 4;
-
-	/* We scale alpha and beta differently depending on how heavy the
-	 * congestion is. Please see RFC 8033 for details.
-	 */
-	if (q->vars.prob < MAX_PROB / 10) {
-		alpha >>= 1;
-		beta >>= 1;
-
-		power = 100;
-		while (q->vars.prob < div_u64(MAX_PROB, power) &&
-		       power <= 1000000) {
-			alpha >>= 2;
-			beta >>= 2;
-			power *= 10;
-		}
+	if (q->vars.prob < MAX_PROB / 100) {
+		alpha =
+		    (q->params.alpha * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 7;
+		beta =
+		    (q->params.beta * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 7;
+	} else if (q->vars.prob < MAX_PROB / 10) {
+		alpha =
+		    (q->params.alpha * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 5;
+		beta =
+		    (q->params.beta * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 5;
+	} else {
+		alpha =
+		    (q->params.alpha * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 4;
+		beta =
+		    (q->params.beta * (MAX_PROB / PSCHED_TICKS_PER_SEC)) >> 4;
 	}
 
 	/* alpha and beta should be between 0 and 32, in multiples of 1/16 */
-	delta += alpha * (u64)(qdelay - q->params.target);
-	delta += beta * (u64)(qdelay - qdelay_old);
+	delta += alpha * ((qdelay - q->params.target));
+	delta += beta * ((qdelay - qdelay_old));
 
 	oldprob = q->vars.prob;
 
 	/* to ensure we increase probability in steps of no more than 2% */
-	if (delta > (s64)(MAX_PROB / (100 / 2)) &&
+	if (delta > (s32)(MAX_PROB / (100 / 2)) &&
 	    q->vars.prob >= MAX_PROB / 10)
 		delta = (MAX_PROB / 100) * 2;
 
@@ -430,8 +406,7 @@ static void calculate_probability(struct Qdisc *sch)
 	 */
 
 	if (qdelay == 0 && qdelay_old == 0 && update_prob)
-		/* Reduce drop probability to 98.4% */
-		q->vars.prob -= q->vars.prob / 64u;
+		q->vars.prob = (q->vars.prob * 98) / 100;
 
 	q->vars.qdelay = qdelay;
 	q->vars.qlen_old = qlen;
@@ -492,7 +467,7 @@ static int pie_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct pie_sched_data *q = qdisc_priv(sch);
 	struct nlattr *opts;
 
-	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
+	opts = nla_nest_start(skb, TCA_OPTIONS);
 	if (!opts)
 		goto nla_put_failure;
 

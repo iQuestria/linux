@@ -1,7 +1,7 @@
 #ifndef _CHIP_H
 #define _CHIP_H
 /*
- * Copyright(c) 2015 - 2018 Intel Corporation.
+ * Copyright(c) 2015 - 2017 Intel Corporation.
  *
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
@@ -804,7 +804,6 @@ void clear_linkup_counters(struct hfi1_devdata *dd);
 u32 hdrqempty(struct hfi1_ctxtdata *rcd);
 int is_ax(struct hfi1_devdata *dd);
 int is_bx(struct hfi1_devdata *dd);
-bool is_urg_masked(struct hfi1_ctxtdata *rcd);
 u32 read_physical_state(struct hfi1_devdata *dd);
 u32 chip_to_opa_pstate(struct hfi1_devdata *dd, u32 chip_pstate);
 const char *opa_lstate_name(u32 lstate);
@@ -858,9 +857,6 @@ static inline int idx_from_vl(int vl)
 /* Per device counter indexes */
 enum {
 	C_RCV_OVF = 0,
-	C_RX_LEN_ERR,
-	C_RX_ICRC_ERR,
-	C_RX_EBP,
 	C_RX_TID_FULL,
 	C_RX_TID_INVALID,
 	C_RX_TID_FLGMS,
@@ -930,7 +926,6 @@ enum {
 	C_SW_PIO_WAIT,
 	C_SW_PIO_DRAIN,
 	C_SW_KMEM_WAIT,
-	C_SW_TID_WAIT,
 	C_SW_SEND_SCHED,
 	C_SDMA_DESC_FETCHED_CNT,
 	C_SDMA_INT_CNT,

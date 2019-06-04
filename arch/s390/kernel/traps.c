@@ -49,7 +49,7 @@ void do_report_trap(struct pt_regs *regs, int si_signo, int si_code, char *str)
 		report_user_fault(regs, si_signo, 0);
         } else {
                 const struct exception_table_entry *fixup;
-		fixup = s390_search_extables(regs->psw.addr);
+		fixup = search_exception_tables(regs->psw.addr);
                 if (fixup)
 			regs->psw.addr = extable_fixup(fixup);
 		else {
@@ -263,6 +263,5 @@ NOKPROBE_SYMBOL(kernel_stack_overflow);
 
 void __init trap_init(void)
 {
-	sort_extable(__start_dma_ex_table, __stop_dma_ex_table);
 	local_mcck_enable();
 }

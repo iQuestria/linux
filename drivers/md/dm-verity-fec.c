@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2015 Google, Inc.
  *
  * Author: Sami Tolvanen <samitolvanen@google.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
  */
 
 #include "dm-verity-fec.h"
@@ -69,7 +73,7 @@ static u8 *fec_read_parity(struct dm_verity *v, u64 rsb, int index,
 	*offset = (unsigned)(position - (block << v->data_dev_block_bits));
 
 	res = dm_bufio_read(v->fec->bufio, v->fec->start + block, buf);
-	if (IS_ERR(res)) {
+	if (unlikely(IS_ERR(res))) {
 		DMERR("%s: FEC %llu: parity read failed (block %llu): %ld",
 		      v->data_dev->name, (unsigned long long)rsb,
 		      (unsigned long long)(v->fec->start + block),
@@ -159,7 +163,7 @@ static int fec_decode_bufs(struct dm_verity *v, struct dm_verity_fec_io *fio,
 			dm_bufio_release(buf);
 
 			par = fec_read_parity(v, rsb, block_offset, &offset, &buf);
-			if (IS_ERR(par))
+			if (unlikely(IS_ERR(par)))
 				return PTR_ERR(par);
 		}
 	}
@@ -249,7 +253,7 @@ static int fec_read_bufs(struct dm_verity *v, struct dm_verity_io *io,
 		}
 
 		bbuf = dm_bufio_read(bufio, block, &buf);
-		if (IS_ERR(bbuf)) {
+		if (unlikely(IS_ERR(bbuf))) {
 			DMWARN_LIMIT("%s: FEC %llu: read failed (%llu): %ld",
 				     v->data_dev->name,
 				     (unsigned long long)rsb,

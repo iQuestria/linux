@@ -104,7 +104,6 @@ struct gpio_descs *__must_check
 devm_gpiod_get_array_optional(struct device *dev, const char *con_id,
 			      enum gpiod_flags flags);
 void devm_gpiod_put(struct device *dev, struct gpio_desc *desc);
-void devm_gpiod_unhinge(struct device *dev, struct gpio_desc *desc);
 void devm_gpiod_put_array(struct device *dev, struct gpio_descs *descs);
 
 int gpiod_get_direction(struct gpio_desc *desc);
@@ -163,7 +162,7 @@ int gpiod_is_active_low(const struct gpio_desc *desc);
 int gpiod_cansleep(const struct gpio_desc *desc);
 
 int gpiod_to_irq(const struct gpio_desc *desc);
-int gpiod_set_consumer_name(struct gpio_desc *desc, const char *name);
+void gpiod_set_consumer_name(struct gpio_desc *desc, const char *name);
 
 /* Convert between the old gpio_ and new gpiod_ interfaces */
 struct gpio_desc *gpio_to_desc(unsigned gpio);
@@ -173,10 +172,6 @@ int desc_to_gpio(const struct gpio_desc *desc);
 struct device_node;
 struct fwnode_handle;
 
-struct gpio_desc *gpiod_get_from_of_node(struct device_node *node,
-					 const char *propname, int index,
-					 enum gpiod_flags dflags,
-					 const char *label);
 struct gpio_desc *devm_gpiod_get_from_of_node(struct device *dev,
 					      struct device_node *node,
 					      const char *propname, int index,
@@ -243,15 +238,6 @@ gpiod_get_array_optional(struct device *dev, const char *con_id,
 }
 
 static inline void gpiod_put(struct gpio_desc *desc)
-{
-	might_sleep();
-
-	/* GPIO can never have been requested */
-	WARN_ON(1);
-}
-
-static inline void devm_gpiod_unhinge(struct device *dev,
-				      struct gpio_desc *desc)
 {
 	might_sleep();
 
@@ -509,17 +495,15 @@ static inline int gpiod_to_irq(const struct gpio_desc *desc)
 	return -EINVAL;
 }
 
-static inline int gpiod_set_consumer_name(struct gpio_desc *desc,
-					  const char *name)
+static inline void gpiod_set_consumer_name(struct gpio_desc *desc, const char *name)
 {
 	/* GPIO can never have been requested */
 	WARN_ON(1);
-	return -EINVAL;
 }
 
 static inline struct gpio_desc *gpio_to_desc(unsigned gpio)
 {
-	return NULL;
+	return ERR_PTR(-EINVAL);
 }
 
 static inline int desc_to_gpio(const struct gpio_desc *desc)
@@ -532,15 +516,6 @@ static inline int desc_to_gpio(const struct gpio_desc *desc)
 /* Child properties interface */
 struct device_node;
 struct fwnode_handle;
-
-static inline
-struct gpio_desc *gpiod_get_from_of_node(struct device_node *node,
-					 const char *propname, int index,
-					 enum gpiod_flags dflags,
-					 const char *label)
-{
-	return ERR_PTR(-ENOSYS);
-}
 
 static inline
 struct gpio_desc *devm_gpiod_get_from_of_node(struct device *dev,

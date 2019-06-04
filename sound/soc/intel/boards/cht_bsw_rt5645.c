@@ -27,6 +27,7 @@
 #include <linux/dmi.h>
 #include <linux/slab.h>
 #include <asm/cpu_device_id.h>
+#include <asm/platform_sst_audio.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -530,9 +531,8 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = snd_soc_cards[0].soc_card;
 	struct snd_soc_acpi_mach *mach;
-	const char *platform_name;
 	struct cht_mc_private *drv;
-	struct acpi_device *adev;
+	const char *i2c_name = NULL;
 	bool found = false;
 	bool is_bytcr = false;
 	int dai_index = 0;
@@ -573,11 +573,10 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 		}
 
 	/* fixup codec name based on HID */
-	adev = acpi_dev_get_first_match_dev(mach->id, NULL, -1);
-	if (adev) {
+	i2c_name = acpi_dev_get_first_match_name(mach->id, NULL, -1);
+	if (i2c_name) {
 		snprintf(cht_rt5645_codec_name, sizeof(cht_rt5645_codec_name),
-			 "i2c-%s", acpi_dev_name(adev));
-		put_device(&adev->dev);
+			"%s%s", "i2c-", i2c_name);
 		cht_dailink[dai_index].codec_name = cht_rt5645_codec_name;
 	}
 
@@ -586,7 +585,10 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 	 * (will be overridden if DMI quirk is detected)
 	 */
 	if (is_valleyview()) {
-		if (mach->mach_params.acpi_ipc_irq_index == 0)
+		struct sst_platform_info *p_info = mach->pdata;
+		const struct sst_res_info *res_info = p_info->res_info;
+
+		if (res_info->acpi_ipc_irq_index == 0)
 			is_bytcr = true;
 	}
 
@@ -664,14 +666,6 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 		cht_dailink[dai_index].cpu_dai_name =
 			cht_rt5645_cpu_dai_name;
 	}
-
-	/* override plaform name, if required */
-	platform_name = mach->mach_params.platform;
-
-	ret_val = snd_soc_fixup_dai_links_platform_name(card,
-							platform_name);
-	if (ret_val)
-		return ret_val;
 
 	drv->mclk = devm_clk_get(&pdev->dev, "pmc_plt_clk_3");
 	if (IS_ERR(drv->mclk)) {

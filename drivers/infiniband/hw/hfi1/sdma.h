@@ -382,7 +382,6 @@ struct sdma_engine {
 	u64                     progress_int_cnt;
 
 	/* private: */
-	seqlock_t            waitlock;
 	struct list_head      dmawait;
 
 	/* CONFIG SDMA for now, just blindly duplicate */

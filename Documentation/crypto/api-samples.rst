@@ -133,6 +133,7 @@ Code Example For Use of Operational State Memory With SHASH
         if (!sdesc)
             return ERR_PTR(-ENOMEM);
         sdesc->shash.tfm = alg;
+        sdesc->shash.flags = 0x0;
         return sdesc;
     }
 

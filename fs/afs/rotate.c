@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* Handle fileserver selection and rotation.
  *
  * Copyright (C) 2017 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public Licence
+ * as published by the Free Software Foundation; either version
+ * 2 of the Licence, or (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -21,7 +25,7 @@
  * them here also using the io_lock.
  */
 bool afs_begin_vnode_operation(struct afs_fs_cursor *fc, struct afs_vnode *vnode,
-			       struct key *key, bool intr)
+			       struct key *key)
 {
 	memset(fc, 0, sizeof(*fc));
 	fc->vnode = vnode;
@@ -29,15 +33,10 @@ bool afs_begin_vnode_operation(struct afs_fs_cursor *fc, struct afs_vnode *vnode
 	fc->ac.error = SHRT_MAX;
 	fc->error = -EDESTADDRREQ;
 
-	if (intr) {
-		fc->flags |= AFS_FS_CURSOR_INTR;
-		if (mutex_lock_interruptible(&vnode->io_lock) < 0) {
-			fc->error = -EINTR;
-			fc->flags |= AFS_FS_CURSOR_STOP;
-			return false;
-		}
-	} else {
-		mutex_lock(&vnode->io_lock);
+	if (mutex_lock_interruptible(&vnode->io_lock) < 0) {
+		fc->error = -EINTR;
+		fc->flags |= AFS_FS_CURSOR_STOP;
+		return false;
 	}
 
 	if (vnode->lock_state != AFS_VNODE_LOCK_NONE)
@@ -62,8 +61,7 @@ static bool afs_start_fs_iteration(struct afs_fs_cursor *fc,
 	fc->untried = (1UL << fc->server_list->nr_servers) - 1;
 	fc->index = READ_ONCE(fc->server_list->preferred);
 
-	cbi = rcu_dereference_protected(vnode->cb_interest,
-					lockdep_is_held(&vnode->io_lock));
+	cbi = vnode->cb_interest;
 	if (cbi) {
 		/* See if the vnode's preferred record is still available */
 		for (i = 0; i < fc->server_list->nr_servers; i++) {
@@ -84,8 +82,8 @@ static bool afs_start_fs_iteration(struct afs_fs_cursor *fc,
 
 		/* Note that the callback promise is effectively broken */
 		write_seqlock(&vnode->cb_lock);
-		ASSERTCMP(cbi, ==, rcu_access_pointer(vnode->cb_interest));
-		rcu_assign_pointer(vnode->cb_interest, NULL);
+		ASSERTCMP(cbi, ==, vnode->cb_interest);
+		vnode->cb_interest = NULL;
 		if (test_and_clear_bit(AFS_VNODE_CB_PROMISED, &vnode->flags))
 			vnode->cb_break++;
 		write_sequnlock(&vnode->cb_lock);
@@ -120,14 +118,10 @@ static void afs_busy(struct afs_volume *volume, u32 abort_code)
  */
 static bool afs_sleep_and_retry(struct afs_fs_cursor *fc)
 {
-	if (fc->flags & AFS_FS_CURSOR_INTR) {
-		msleep_interruptible(1000);
-		if (signal_pending(current)) {
-			fc->error = -ERESTARTSYS;
-			return false;
-		}
-	} else {
-		msleep(1000);
+	msleep_interruptible(1000);
+	if (signal_pending(current)) {
+		fc->error = -ERESTARTSYS;
+		return false;
 	}
 
 	return true;
@@ -414,9 +408,7 @@ selected_server:
 	if (error < 0)
 		goto failed_set_error;
 
-	fc->cbi = afs_get_cb_interest(
-		rcu_dereference_protected(vnode->cb_interest,
-					  lockdep_is_held(&vnode->io_lock)));
+	fc->cbi = afs_get_cb_interest(vnode->cb_interest);
 
 	read_lock(&server->fs_lock);
 	alist = rcu_dereference_protected(server->addresses,
@@ -467,8 +459,6 @@ no_more_servers:
 				     s->probe.abort_code);
 	}
 
-	error = e.error;
-
 failed_set_error:
 	fc->error = error;
 failed:
@@ -486,14 +476,11 @@ failed:
 bool afs_select_current_fileserver(struct afs_fs_cursor *fc)
 {
 	struct afs_vnode *vnode = fc->vnode;
-	struct afs_cb_interest *cbi;
+	struct afs_cb_interest *cbi = vnode->cb_interest;
 	struct afs_addr_list *alist;
 	int error = fc->ac.error;
 
 	_enter("");
-
-	cbi = rcu_dereference_protected(vnode->cb_interest,
-					lockdep_is_held(&vnode->io_lock));
 
 	switch (error) {
 	case SHRT_MAX:
@@ -503,7 +490,7 @@ bool afs_select_current_fileserver(struct afs_fs_cursor *fc)
 			return false;
 		}
 
-		fc->cbi = afs_get_cb_interest(cbi);
+		fc->cbi = afs_get_cb_interest(vnode->cb_interest);
 
 		read_lock(&cbi->server->fs_lock);
 		alist = rcu_dereference_protected(cbi->server->addresses,

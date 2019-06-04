@@ -44,12 +44,15 @@ static struct inode *jffs2_alloc_inode(struct super_block *sb)
 	return &f->vfs_inode;
 }
 
-static void jffs2_free_inode(struct inode *inode)
+static void jffs2_i_callback(struct rcu_head *head)
 {
-	struct jffs2_inode_info *f = JFFS2_INODE_INFO(inode);
+	struct inode *inode = container_of(head, struct inode, i_rcu);
+	kmem_cache_free(jffs2_inode_cachep, JFFS2_INODE_INFO(inode));
+}
 
-	kfree(f->target);
-	kmem_cache_free(jffs2_inode_cachep, f);
+static void jffs2_destroy_inode(struct inode *inode)
+{
+	call_rcu(&inode->i_rcu, jffs2_i_callback);
 }
 
 static void jffs2_i_init_once(void *foo)
@@ -98,8 +101,7 @@ static int jffs2_sync_fs(struct super_block *sb, int wait)
 	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
 
 #ifdef CONFIG_JFFS2_FS_WRITEBUFFER
-	if (jffs2_is_writebuffered(c))
-		cancel_delayed_work_sync(&c->wbuf_dwork);
+	cancel_delayed_work_sync(&c->wbuf_dwork);
 #endif
 
 	mutex_lock(&c->alloc_sem);
@@ -252,7 +254,7 @@ static int jffs2_remount_fs(struct super_block *sb, int *flags, char *data)
 static const struct super_operations jffs2_super_operations =
 {
 	.alloc_inode =	jffs2_alloc_inode,
-	.free_inode =	jffs2_free_inode,
+	.destroy_inode =jffs2_destroy_inode,
 	.put_super =	jffs2_put_super,
 	.statfs =	jffs2_statfs,
 	.remount_fs =	jffs2_remount_fs,

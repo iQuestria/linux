@@ -1056,22 +1056,17 @@ static struct nmk_gpio_chip *nmk_gpio_populate_chip(struct device_node *np,
 	}
 	if (of_property_read_u32(np, "gpio-bank", &id)) {
 		dev_err(&pdev->dev, "populate: gpio-bank property not found\n");
-		platform_device_put(gpio_pdev);
 		return ERR_PTR(-EINVAL);
 	}
 
 	/* Already populated? */
 	nmk_chip = nmk_gpio_chips[id];
-	if (nmk_chip) {
-		platform_device_put(gpio_pdev);
+	if (nmk_chip)
 		return nmk_chip;
-	}
 
 	nmk_chip = devm_kzalloc(&pdev->dev, sizeof(*nmk_chip), GFP_KERNEL);
-	if (!nmk_chip) {
-		platform_device_put(gpio_pdev);
+	if (!nmk_chip)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	nmk_chip->bank = id;
 	chip = &nmk_chip->chip;
@@ -1082,17 +1077,13 @@ static struct nmk_gpio_chip *nmk_gpio_populate_chip(struct device_node *np,
 
 	res = platform_get_resource(gpio_pdev, IORESOURCE_MEM, 0);
 	base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(base)) {
-		platform_device_put(gpio_pdev);
+	if (IS_ERR(base))
 		return ERR_CAST(base);
-	}
 	nmk_chip->addr = base;
 
 	clk = clk_get(&gpio_pdev->dev, NULL);
-	if (IS_ERR(clk)) {
-		platform_device_put(gpio_pdev);
+	if (IS_ERR(clk))
 		return (void *) clk;
-	}
 	clk_prepare(clk);
 	nmk_chip->clk = clk;
 

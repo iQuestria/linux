@@ -123,28 +123,52 @@ static void lb035q02_disconnect(struct omap_dss_device *src,
 {
 }
 
-static void lb035q02_enable(struct omap_dss_device *dssdev)
+static int lb035q02_enable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	struct omap_dss_device *src = dssdev->src;
+	int r;
+
+	if (!omapdss_device_is_connected(dssdev))
+		return -ENODEV;
+
+	if (omapdss_device_is_enabled(dssdev))
+		return 0;
+
+	r = src->ops->enable(src);
+	if (r)
+		return r;
 
 	if (ddata->enable_gpio)
 		gpiod_set_value_cansleep(ddata->enable_gpio, 1);
+
+	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
+
+	return 0;
 }
 
 static void lb035q02_disable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	struct omap_dss_device *src = dssdev->src;
+
+	if (!omapdss_device_is_enabled(dssdev))
+		return;
 
 	if (ddata->enable_gpio)
 		gpiod_set_value_cansleep(ddata->enable_gpio, 0);
+
+	src->ops->disable(src);
+
+	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 }
 
-static int lb035q02_get_modes(struct omap_dss_device *dssdev,
-			      struct drm_connector *connector)
+static void lb035q02_get_timings(struct omap_dss_device *dssdev,
+				 struct videomode *vm)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
 
-	return omapdss_display_get_modes(connector, &ddata->vm);
+	*vm = ddata->vm;
 }
 
 static const struct omap_dss_device_ops lb035q02_ops = {
@@ -154,7 +178,7 @@ static const struct omap_dss_device_ops lb035q02_ops = {
 	.enable		= lb035q02_enable,
 	.disable	= lb035q02_disable,
 
-	.get_modes	= lb035q02_get_modes,
+	.get_timings	= lb035q02_get_timings,
 };
 
 static int lb035q02_probe_of(struct spi_device *spi)
@@ -197,19 +221,16 @@ static int lb035q02_panel_spi_probe(struct spi_device *spi)
 	dssdev->dev = &spi->dev;
 	dssdev->ops = &lb035q02_ops;
 	dssdev->type = OMAP_DISPLAY_TYPE_DPI;
-	dssdev->display = true;
 	dssdev->owner = THIS_MODULE;
 	dssdev->of_ports = BIT(0);
-	dssdev->ops_flags = OMAP_DSS_DEVICE_OP_MODES;
 
 	/*
 	 * Note: According to the panel documentation:
 	 * DE is active LOW
 	 * DATA needs to be driven on the FALLING edge
 	 */
-	dssdev->bus_flags = DRM_BUS_FLAG_DE_HIGH
-			  | DRM_BUS_FLAG_SYNC_DRIVE_NEGEDGE
-			  | DRM_BUS_FLAG_PIXDATA_DRIVE_POSEDGE;
+	dssdev->bus_flags = DRM_BUS_FLAG_DE_HIGH | DRM_BUS_FLAG_SYNC_NEGEDGE
+			  | DRM_BUS_FLAG_PIXDATA_POSEDGE;
 
 	omapdss_display_init(dssdev);
 	omapdss_device_register(dssdev);

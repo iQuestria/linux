@@ -14,10 +14,23 @@
 #include <linux/sched.h>
 #include <abi/ckmmu.h>
 
+static inline void tlbmiss_handler_setup_pgd(unsigned long pgd, bool kernel)
+{
+	pgd -= PAGE_OFFSET;
+	pgd += PHYS_OFFSET;
+	pgd |= 1;
+	setup_pgd(pgd, kernel);
+}
+
 #define TLBMISS_HANDLER_SETUP_PGD(pgd) \
-	setup_pgd(__pa(pgd), false)
+	tlbmiss_handler_setup_pgd((unsigned long)pgd, 0)
 #define TLBMISS_HANDLER_SETUP_PGD_KERNEL(pgd) \
-	setup_pgd(__pa(pgd), true)
+	tlbmiss_handler_setup_pgd((unsigned long)pgd, 1)
+
+static inline unsigned long tlb_get_pgd(void)
+{
+	return ((get_pgd() - PHYS_OFFSET) & ~1) + PAGE_OFFSET;
+}
 
 #define cpu_context(cpu, mm)	((mm)->context.asid[cpu])
 #define cpu_asid(cpu, mm)	(cpu_context((cpu), (mm)) & ASID_MASK)

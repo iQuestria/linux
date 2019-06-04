@@ -249,15 +249,15 @@ static void hdmi_power_off_full(struct omap_hdmi *hdmi)
 }
 
 static void hdmi_display_set_timings(struct omap_dss_device *dssdev,
-				     const struct drm_display_mode *mode)
+				     const struct videomode *vm)
 {
 	struct omap_hdmi *hdmi = dssdev_to_hdmi(dssdev);
 
 	mutex_lock(&hdmi->lock);
 
-	drm_display_mode_to_videomode(mode, &hdmi->cfg.vm);
+	hdmi->cfg.vm = *vm;
 
-	dispc_set_tv_pclk(hdmi->dss->dispc, mode->clock * 1000);
+	dispc_set_tv_pclk(hdmi->dss->dispc, vm->pixelclock);
 
 	mutex_unlock(&hdmi->lock);
 }
@@ -312,20 +312,26 @@ static void hdmi_stop_audio_stream(struct omap_hdmi *hd)
 	hdmi_wp_audio_enable(&hd->wp, false);
 }
 
-static void hdmi_display_enable(struct omap_dss_device *dssdev)
+static int hdmi_display_enable(struct omap_dss_device *dssdev)
 {
 	struct omap_hdmi *hdmi = dssdev_to_hdmi(dssdev);
 	unsigned long flags;
-	int r;
+	int r = 0;
 
 	DSSDBG("ENTER hdmi_display_enable\n");
 
 	mutex_lock(&hdmi->lock);
 
+	if (!dssdev->dispc_channel_connected) {
+		DSSERR("failed to enable display: no output/manager\n");
+		r = -ENODEV;
+		goto err0;
+	}
+
 	r = hdmi_power_on_full(hdmi);
 	if (r) {
 		DSSERR("failed to power on device\n");
-		goto done;
+		goto err0;
 	}
 
 	if (hdmi->audio_configured) {
@@ -345,8 +351,12 @@ static void hdmi_display_enable(struct omap_dss_device *dssdev)
 	hdmi->display_enabled = true;
 	spin_unlock_irqrestore(&hdmi->audio_playing_lock, flags);
 
-done:
 	mutex_unlock(&hdmi->lock);
+	return 0;
+
+err0:
+	mutex_unlock(&hdmi->lock);
+	return r;
 }
 
 static void hdmi_display_disable(struct omap_dss_device *dssdev)
@@ -407,12 +417,21 @@ void hdmi4_core_disable(struct hdmi_core_data *core)
 static int hdmi_connect(struct omap_dss_device *src,
 			struct omap_dss_device *dst)
 {
-	return omapdss_device_connect(dst->dss, dst, dst->next);
+	int r;
+
+	r = omapdss_device_connect(dst->dss, dst, dst->next);
+	if (r)
+		return r;
+
+	dst->dispc_channel_connected = true;
+	return 0;
 }
 
 static void hdmi_disconnect(struct omap_dss_device *src,
 			    struct omap_dss_device *dst)
 {
+	dst->dispc_channel_connected = false;
+
 	omapdss_device_disconnect(dst, dst->next);
 }
 
@@ -679,7 +698,7 @@ static int hdmi4_init_output(struct omap_hdmi *hdmi)
 
 	out->dev = &hdmi->pdev->dev;
 	out->id = OMAP_DSS_OUTPUT_HDMI;
-	out->type = OMAP_DISPLAY_TYPE_HDMI;
+	out->output_type = OMAP_DISPLAY_TYPE_HDMI;
 	out->name = "hdmi.0";
 	out->dispc_channel = OMAP_DSS_CHANNEL_DIGIT;
 	out->ops = &hdmi_ops;
@@ -687,9 +706,19 @@ static int hdmi4_init_output(struct omap_hdmi *hdmi)
 	out->of_ports = BIT(0);
 	out->ops_flags = OMAP_DSS_DEVICE_OP_EDID;
 
-	r = omapdss_device_init_output(out);
-	if (r < 0)
+	out->next = omapdss_of_find_connected_device(out->dev->of_node, 0);
+	if (IS_ERR(out->next)) {
+		if (PTR_ERR(out->next) != -EPROBE_DEFER)
+			dev_err(out->dev, "failed to find video sink\n");
+		return PTR_ERR(out->next);
+	}
+
+	r = omapdss_output_validate(out);
+	if (r) {
+		omapdss_device_put(out->next);
+		out->next = NULL;
 		return r;
+	}
 
 	omapdss_device_register(out);
 
@@ -700,8 +729,9 @@ static void hdmi4_uninit_output(struct omap_hdmi *hdmi)
 {
 	struct omap_dss_device *out = &hdmi->output;
 
+	if (out->next)
+		omapdss_device_put(out->next);
 	omapdss_device_unregister(out);
-	omapdss_device_cleanup_output(out);
 }
 
 static int hdmi4_probe_of(struct omap_hdmi *hdmi)

@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/regulator/driver.h>
@@ -21,8 +20,6 @@
 #include <linux/regulator/of_regulator.h>
 
 #include <linux/mfd/lochnagar.h>
-#include <linux/mfd/lochnagar1_regs.h>
-#include <linux/mfd/lochnagar2_regs.h>
 
 static const struct regulator_ops lochnagar_micvdd_ops = {
 	.enable = regulator_enable_regmap,
@@ -194,7 +191,7 @@ static const struct regulator_desc lochnagar_regulators[] = {
 		.name = "VDDCORE",
 		.supply_name = "SYSVDD",
 		.type = REGULATOR_VOLTAGE,
-		.n_voltages = 66,
+		.n_voltages = 57,
 		.ops = &lochnagar_vddcore_ops,
 
 		.id = LOCHNAGAR_VDDCORE,
@@ -215,53 +212,28 @@ static const struct regulator_desc lochnagar_regulators[] = {
 	},
 };
 
-static const struct of_device_id lochnagar_of_match[] = {
-	{
-		.compatible = "cirrus,lochnagar2-micvdd",
-		.data = &lochnagar_regulators[LOCHNAGAR_MICVDD],
-	},
-	{
-		.compatible = "cirrus,lochnagar2-mic1vdd",
-		.data = &lochnagar_regulators[LOCHNAGAR_MIC1VDD],
-	},
-	{
-		.compatible = "cirrus,lochnagar2-mic2vdd",
-		.data = &lochnagar_regulators[LOCHNAGAR_MIC2VDD],
-	},
-	{
-		.compatible = "cirrus,lochnagar2-vddcore",
-		.data = &lochnagar_regulators[LOCHNAGAR_VDDCORE],
-	},
-	{}
-};
-MODULE_DEVICE_TABLE(of, lochnagar_of_match);
-
 static int lochnagar_regulator_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct lochnagar *lochnagar = dev_get_drvdata(dev->parent);
 	struct regulator_config config = { };
-	const struct of_device_id *of_id;
-	const struct regulator_desc *desc;
 	struct regulator_dev *rdev;
-	int ret;
+	int ret, i;
 
-	config.dev = dev;
+	config.dev = lochnagar->dev;
 	config.regmap = lochnagar->regmap;
 	config.driver_data = lochnagar;
 
-	of_id = of_match_device(lochnagar_of_match, dev);
-	if (!of_id)
-		return -EINVAL;
+	for (i = 0; i < ARRAY_SIZE(lochnagar_regulators); i++) {
+		const struct regulator_desc *desc = &lochnagar_regulators[i];
 
-	desc = of_id->data;
-
-	rdev = devm_regulator_register(dev, desc, &config);
-	if (IS_ERR(rdev)) {
-		ret = PTR_ERR(rdev);
-		dev_err(dev, "Failed to register %s regulator: %d\n",
-			desc->name, ret);
-		return ret;
+		rdev = devm_regulator_register(dev, desc, &config);
+		if (IS_ERR(rdev)) {
+			ret = PTR_ERR(rdev);
+			dev_err(dev, "Failed to register %s regulator: %d\n",
+				desc->name, ret);
+			return ret;
+		}
 	}
 
 	return 0;
@@ -270,7 +242,6 @@ static int lochnagar_regulator_probe(struct platform_device *pdev)
 static struct platform_driver lochnagar_regulator_driver = {
 	.driver = {
 		.name = "lochnagar-regulator",
-		.of_match_table = of_match_ptr(lochnagar_of_match),
 	},
 
 	.probe = lochnagar_regulator_probe,

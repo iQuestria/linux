@@ -13,7 +13,6 @@
 
 #include <linux/clk-provider.h>
 #include <linux/clk/sunxi-ng.h>
-#include <linux/io.h>
 
 #include "ccu_common.h"
 

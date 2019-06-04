@@ -69,8 +69,7 @@ static int validate_nla_bitfield32(const struct nlattr *nla,
 
 static int nla_validate_array(const struct nlattr *head, int len, int maxtype,
 			      const struct nla_policy *policy,
-			      struct netlink_ext_ack *extack,
-			      unsigned int validate)
+			      struct netlink_ext_ack *extack)
 {
 	const struct nlattr *entry;
 	int rem;
@@ -87,8 +86,8 @@ static int nla_validate_array(const struct nlattr *head, int len, int maxtype,
 			return -ERANGE;
 		}
 
-		ret = __nla_validate(nla_data(entry), nla_len(entry),
-				     maxtype, policy, validate, extack);
+		ret = nla_validate(nla_data(entry), nla_len(entry),
+				   maxtype, policy, extack);
 		if (ret < 0)
 			return ret;
 	}
@@ -155,16 +154,12 @@ static int nla_validate_int_range(const struct nla_policy *pt,
 }
 
 static int validate_nla(const struct nlattr *nla, int maxtype,
-			const struct nla_policy *policy, unsigned int validate,
+			const struct nla_policy *policy,
 			struct netlink_ext_ack *extack)
 {
-	u16 strict_start_type = policy[0].strict_start_type;
 	const struct nla_policy *pt;
 	int minlen = 0, attrlen = nla_len(nla), type = nla_type(nla);
 	int err = -ERANGE;
-
-	if (strict_start_type && type >= strict_start_type)
-		validate |= NL_VALIDATE_STRICT;
 
 	if (type <= 0 || type > maxtype)
 		return 0;
@@ -177,26 +172,6 @@ static int validate_nla(const struct nlattr *nla, int maxtype,
 	    (pt->type == NLA_EXACT_LEN_WARN && attrlen != pt->len)) {
 		pr_warn_ratelimited("netlink: '%s': attribute type %d has an invalid length.\n",
 				    current->comm, type);
-		if (validate & NL_VALIDATE_STRICT_ATTRS) {
-			NL_SET_ERR_MSG_ATTR(extack, nla,
-					    "invalid attribute length");
-			return -EINVAL;
-		}
-	}
-
-	if (validate & NL_VALIDATE_NESTED) {
-		if ((pt->type == NLA_NESTED || pt->type == NLA_NESTED_ARRAY) &&
-		    !(nla->nla_type & NLA_F_NESTED)) {
-			NL_SET_ERR_MSG_ATTR(extack, nla,
-					    "NLA_F_NESTED is missing");
-			return -EINVAL;
-		}
-		if (pt->type != NLA_NESTED && pt->type != NLA_NESTED_ARRAY &&
-		    pt->type != NLA_UNSPEC && (nla->nla_type & NLA_F_NESTED)) {
-			NL_SET_ERR_MSG_ATTR(extack, nla,
-					    "NLA_F_NESTED not expected");
-			return -EINVAL;
-		}
 	}
 
 	switch (pt->type) {
@@ -269,9 +244,8 @@ static int validate_nla(const struct nlattr *nla, int maxtype,
 		if (attrlen < NLA_HDRLEN)
 			goto out_err;
 		if (pt->validation_data) {
-			err = __nla_validate(nla_data(nla), nla_len(nla), pt->len,
-					     pt->validation_data, validate,
-					     extack);
+			err = nla_validate(nla_data(nla), nla_len(nla), pt->len,
+					   pt->validation_data, extack);
 			if (err < 0) {
 				/*
 				 * return directly to preserve the inner
@@ -294,7 +268,7 @@ static int validate_nla(const struct nlattr *nla, int maxtype,
 
 			err = nla_validate_array(nla_data(nla), nla_len(nla),
 						 pt->len, pt->validation_data,
-						 extack, validate);
+						 extack);
 			if (err < 0) {
 				/*
 				 * return directly to preserve the inner
@@ -304,23 +278,10 @@ static int validate_nla(const struct nlattr *nla, int maxtype,
 			}
 		}
 		break;
-
-	case NLA_UNSPEC:
-		if (validate & NL_VALIDATE_UNSPEC) {
-			NL_SET_ERR_MSG_ATTR(extack, nla,
-					    "Unsupported attribute");
-			return -EINVAL;
-		}
-		/* fall through */
-	case NLA_MIN_LEN:
-		if (attrlen < pt->len)
-			goto out_err;
-		break;
-
 	default:
 		if (pt->len)
 			minlen = pt->len;
-		else
+		else if (pt->type != NLA_UNSPEC)
 			minlen = nla_attr_minlen[pt->type];
 
 		if (attrlen < minlen)
@@ -354,76 +315,37 @@ out_err:
 	return err;
 }
 
-static int __nla_validate_parse(const struct nlattr *head, int len, int maxtype,
-				const struct nla_policy *policy,
-				unsigned int validate,
-				struct netlink_ext_ack *extack,
-				struct nlattr **tb)
-{
-	const struct nlattr *nla;
-	int rem;
-
-	if (tb)
-		memset(tb, 0, sizeof(struct nlattr *) * (maxtype + 1));
-
-	nla_for_each_attr(nla, head, len, rem) {
-		u16 type = nla_type(nla);
-
-		if (type == 0 || type > maxtype) {
-			if (validate & NL_VALIDATE_MAXTYPE) {
-				NL_SET_ERR_MSG_ATTR(extack, nla,
-						    "Unknown attribute type");
-				return -EINVAL;
-			}
-			continue;
-		}
-		if (policy) {
-			int err = validate_nla(nla, maxtype, policy,
-					       validate, extack);
-
-			if (err < 0)
-				return err;
-		}
-
-		if (tb)
-			tb[type] = (struct nlattr *)nla;
-	}
-
-	if (unlikely(rem > 0)) {
-		pr_warn_ratelimited("netlink: %d bytes leftover after parsing attributes in process `%s'.\n",
-				    rem, current->comm);
-		NL_SET_ERR_MSG(extack, "bytes leftover after parsing attributes");
-		if (validate & NL_VALIDATE_TRAILING)
-			return -EINVAL;
-	}
-
-	return 0;
-}
-
 /**
- * __nla_validate - Validate a stream of attributes
+ * nla_validate - Validate a stream of attributes
  * @head: head of attribute stream
  * @len: length of attribute stream
  * @maxtype: maximum attribute type to be expected
  * @policy: validation policy
- * @validate: validation strictness
  * @extack: extended ACK report struct
  *
  * Validates all attributes in the specified attribute stream against the
- * specified policy. Validation depends on the validate flags passed, see
- * &enum netlink_validation for more details on that.
- * See documenation of struct nla_policy for more details.
+ * specified policy. Attributes with a type exceeding maxtype will be
+ * ignored. See documenation of struct nla_policy for more details.
  *
  * Returns 0 on success or a negative error code.
  */
-int __nla_validate(const struct nlattr *head, int len, int maxtype,
-		   const struct nla_policy *policy, unsigned int validate,
-		   struct netlink_ext_ack *extack)
+int nla_validate(const struct nlattr *head, int len, int maxtype,
+		 const struct nla_policy *policy,
+		 struct netlink_ext_ack *extack)
 {
-	return __nla_validate_parse(head, len, maxtype, policy, validate,
-				    extack, NULL);
+	const struct nlattr *nla;
+	int rem;
+
+	nla_for_each_attr(nla, head, len, rem) {
+		int err = validate_nla(nla, maxtype, policy, extack);
+
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
 }
-EXPORT_SYMBOL(__nla_validate);
+EXPORT_SYMBOL(nla_validate);
 
 /**
  * nla_policy_len - Determin the max. length of a policy
@@ -455,30 +377,76 @@ nla_policy_len(const struct nla_policy *p, int n)
 EXPORT_SYMBOL(nla_policy_len);
 
 /**
- * __nla_parse - Parse a stream of attributes into a tb buffer
+ * nla_parse - Parse a stream of attributes into a tb buffer
  * @tb: destination array with maxtype+1 elements
  * @maxtype: maximum attribute type to be expected
  * @head: head of attribute stream
  * @len: length of attribute stream
  * @policy: validation policy
- * @validate: validation strictness
- * @extack: extended ACK pointer
  *
  * Parses a stream of attributes and stores a pointer to each attribute in
- * the tb array accessible via the attribute type.
- * Validation is controlled by the @validate parameter.
+ * the tb array accessible via the attribute type. Attributes with a type
+ * exceeding maxtype will be silently ignored for backwards compatibility
+ * reasons. policy may be set to NULL if no validation is required.
  *
  * Returns 0 on success or a negative error code.
  */
-int __nla_parse(struct nlattr **tb, int maxtype,
-		const struct nlattr *head, int len,
-		const struct nla_policy *policy, unsigned int validate,
-		struct netlink_ext_ack *extack)
+static int __nla_parse(struct nlattr **tb, int maxtype,
+		       const struct nlattr *head, int len,
+		       bool strict, const struct nla_policy *policy,
+		       struct netlink_ext_ack *extack)
 {
-	return __nla_validate_parse(head, len, maxtype, policy, validate,
-				    extack, tb);
+	const struct nlattr *nla;
+	int rem;
+
+	memset(tb, 0, sizeof(struct nlattr *) * (maxtype + 1));
+
+	nla_for_each_attr(nla, head, len, rem) {
+		u16 type = nla_type(nla);
+
+		if (type == 0 || type > maxtype) {
+			if (strict) {
+				NL_SET_ERR_MSG(extack, "Unknown attribute type");
+				return -EINVAL;
+			}
+			continue;
+		}
+		if (policy) {
+			int err = validate_nla(nla, maxtype, policy, extack);
+
+			if (err < 0)
+				return err;
+		}
+
+		tb[type] = (struct nlattr *)nla;
+	}
+
+	if (unlikely(rem > 0)) {
+		pr_warn_ratelimited("netlink: %d bytes leftover after parsing attributes in process `%s'.\n",
+				    rem, current->comm);
+		NL_SET_ERR_MSG(extack, "bytes leftover after parsing attributes");
+		if (strict)
+			return -EINVAL;
+	}
+
+	return 0;
 }
-EXPORT_SYMBOL(__nla_parse);
+
+int nla_parse(struct nlattr **tb, int maxtype, const struct nlattr *head,
+	      int len, const struct nla_policy *policy,
+	      struct netlink_ext_ack *extack)
+{
+	return __nla_parse(tb, maxtype, head, len, false, policy, extack);
+}
+EXPORT_SYMBOL(nla_parse);
+
+int nla_parse_strict(struct nlattr **tb, int maxtype, const struct nlattr *head,
+		     int len, const struct nla_policy *policy,
+		     struct netlink_ext_ack *extack)
+{
+	return __nla_parse(tb, maxtype, head, len, true, policy, extack);
+}
+EXPORT_SYMBOL(nla_parse_strict);
 
 /**
  * nla_find - Find a specific attribute in a stream of attributes

@@ -25,7 +25,6 @@
 #include <drm/drmP.h>
 #include "amdgpu.h"
 #include "amdgpu_gfx.h"
-#include "amdgpu_rlc.h"
 
 /* delay 0.1 second to enable gfx off feature */
 #define GFX_OFF_DELAY_ENABLE         msecs_to_jiffies(100)
@@ -250,7 +249,7 @@ int amdgpu_gfx_kiq_init_ring(struct amdgpu_device *adev,
 	ring->adev = NULL;
 	ring->ring_obj = NULL;
 	ring->use_doorbell = true;
-	ring->doorbell_index = adev->doorbell_index.kiq;
+	ring->doorbell_index = AMDGPU_DOORBELL_KIQ;
 
 	r = amdgpu_gfx_kiq_acquire(adev, ring);
 	if (r)
@@ -390,7 +389,7 @@ void amdgpu_gfx_compute_mqd_sw_fini(struct amdgpu_device *adev)
 
 void amdgpu_gfx_off_ctrl(struct amdgpu_device *adev, bool enable)
 {
-	if (!(adev->pm.pp_feature & PP_GFXOFF_MASK))
+	if (!(adev->powerplay.pp_feature & PP_GFXOFF_MASK))
 		return;
 
 	if (!adev->powerplay.pp_funcs || !adev->powerplay.pp_funcs->set_powergating_by_smu)

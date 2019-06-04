@@ -14,7 +14,6 @@
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 
@@ -1029,7 +1028,6 @@ static unsigned long __init exynos4_get_xom(void)
 			xom = readl(chipid_base + 8);
 
 		iounmap(chipid_base);
-		of_node_put(np);
 	}
 
 	return xom;

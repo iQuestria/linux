@@ -29,8 +29,7 @@
 
 #include <drm/drm_vma_manager.h>
 #include <drm/drm_gem.h>
-#include <drm/drm_file.h>
-#include <drm/drm_device.h>
+#include <drm/drmP.h>
 
 #include <drm/i915_drm.h>
 
@@ -57,7 +56,6 @@ struct drm_i915_gem_object_ops {
 #define I915_GEM_OBJECT_HAS_STRUCT_PAGE	BIT(0)
 #define I915_GEM_OBJECT_IS_SHRINKABLE	BIT(1)
 #define I915_GEM_OBJECT_IS_PROXY	BIT(2)
-#define I915_GEM_OBJECT_ASYNC_CANCEL	BIT(3)
 
 	/* Interface between the GEM object and its backing storage.
 	 * get_pages() is called once prior to the use of the associated set
@@ -87,33 +85,24 @@ struct drm_i915_gem_object {
 
 	const struct drm_i915_gem_object_ops *ops;
 
-	struct {
-		/**
-		 * @vma.lock: protect the list/tree of vmas
-		 */
-		spinlock_t lock;
-
-		/**
-		 * @vma.list: List of VMAs backed by this object
-		 *
-		 * The VMA on this list are ordered by type, all GGTT vma are
-		 * placed at the head and all ppGTT vma are placed at the tail.
-		 * The different types of GGTT vma are unordered between
-		 * themselves, use the @vma.tree (which has a defined order
-		 * between all VMA) to quickly find an exact match.
-		 */
-		struct list_head list;
-
-		/**
-		 * @vma.tree: Ordered tree of VMAs backed by this object
-		 *
-		 * All VMA created for this object are placed in the @vma.tree
-		 * for fast retrieval via a binary search in
-		 * i915_vma_instance(). They are also added to @vma.list for
-		 * easy iteration.
-		 */
-		struct rb_root tree;
-	} vma;
+	/**
+	 * @vma_list: List of VMAs backed by this object
+	 *
+	 * The VMA on this list are ordered by type, all GGTT vma are placed
+	 * at the head and all ppGTT vma are placed at the tail. The different
+	 * types of GGTT vma are unordered between themselves, use the
+	 * @vma_tree (which has a defined order between all VMA) to find an
+	 * exact match.
+	 */
+	struct list_head vma_list;
+	/**
+	 * @vma_tree: Ordered tree of VMAs backed by this object
+	 *
+	 * All VMA created for this object are placed in the @vma_tree for
+	 * fast retrieval via a binary search in i915_vma_instance().
+	 * They are also added to @vma_list for easy iteration.
+	 */
+	struct rb_root vma_tree;
 
 	/**
 	 * @lut_list: List of vma lookup entries in use for this object.
@@ -175,7 +164,7 @@ struct drm_i915_gem_object {
 
 	atomic_t frontbuffer_bits;
 	unsigned int frontbuffer_ggtt_origin; /* write once */
-	struct i915_active_request frontbuffer_write;
+	struct i915_gem_active frontbuffer_write;
 
 	/** Current tiling stride for the object, if it's tiled. */
 	unsigned int tiling_and_stride;
@@ -304,9 +293,6 @@ to_intel_bo(struct drm_gem_object *gem)
 	return container_of(gem, struct drm_i915_gem_object, base);
 }
 
-struct drm_i915_gem_object *i915_gem_object_alloc(void);
-void i915_gem_object_free(struct drm_i915_gem_object *obj);
-
 /**
  * i915_gem_object_lookup_rcu - look up a temporary GEM object from its handle
  * @filp: DRM file private date
@@ -398,12 +384,6 @@ static inline bool
 i915_gem_object_is_proxy(const struct drm_i915_gem_object *obj)
 {
 	return obj->ops->flags & I915_GEM_OBJECT_IS_PROXY;
-}
-
-static inline bool
-i915_gem_object_needs_async_cancel(const struct drm_i915_gem_object *obj)
-{
-	return obj->ops->flags & I915_GEM_OBJECT_ASYNC_CANCEL;
 }
 
 static inline bool
@@ -502,8 +482,5 @@ void i915_gem_object_set_cache_coherency(struct drm_i915_gem_object *obj,
 					 unsigned int cache_level);
 void i915_gem_object_flush_if_display(struct drm_i915_gem_object *obj);
 
-void __i915_gem_object_release_shmem(struct drm_i915_gem_object *obj,
-				     struct sg_table *pages,
-				     bool needs_clflush);
-
 #endif
+

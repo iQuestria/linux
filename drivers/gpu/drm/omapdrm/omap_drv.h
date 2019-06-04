@@ -23,6 +23,7 @@
 #include <linux/workqueue.h>
 
 #include <drm/drmP.h>
+#include <drm/drm_crtc_helper.h>
 #include <drm/drm_gem.h>
 #include <drm/omap_drm.h>
 
@@ -49,7 +50,7 @@ struct omap_drm_pipeline {
 	struct drm_encoder *encoder;
 	struct drm_connector *connector;
 	struct omap_dss_device *output;
-	unsigned int alias_id;
+	struct omap_dss_device *display;
 };
 
 struct omap_drm_private {

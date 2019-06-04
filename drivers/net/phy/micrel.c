@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * drivers/net/phy/micrel.c
  *
@@ -8,6 +7,11 @@
  *
  * Copyright (c) 2010-2013 Micrel, Inc.
  * Copyright (c) 2014 Johan Hovold <johan@kernel.org>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  *
  * Support : Micrel Phys:
  *		Giga phys: ksz9021, ksz9031, ksz9131
@@ -28,7 +32,6 @@
 
 /* Operation Mode Strap Override */
 #define MII_KSZPHY_OMSO				0x16
-#define KSZPHY_OMSO_FACTORY_TEST		BIT(15)
 #define KSZPHY_OMSO_B_CAST_OFF			BIT(9)
 #define KSZPHY_OMSO_NAND_TREE_ON		BIT(5)
 #define KSZPHY_OMSO_RMII_OVERRIDE		BIT(1)
@@ -308,22 +311,17 @@ static int kszphy_config_init(struct phy_device *phydev)
 
 static int ksz8041_config_init(struct phy_device *phydev)
 {
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
-
 	struct device_node *of_node = phydev->mdio.dev.of_node;
 
 	/* Limit supported and advertised modes in fiber mode */
 	if (of_property_read_bool(of_node, "micrel,fiber-mode")) {
 		phydev->dev_flags |= MICREL_PHY_FXEN;
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Full_BIT, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Half_BIT, mask);
-
-		linkmode_and(phydev->supported, phydev->supported, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_FIBRE_BIT,
-				 phydev->supported);
-		linkmode_and(phydev->advertising, phydev->advertising, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_FIBRE_BIT,
-				 phydev->advertising);
+		phydev->supported &= SUPPORTED_100baseT_Full |
+				     SUPPORTED_100baseT_Half;
+		phydev->supported |= SUPPORTED_FIBRE;
+		phydev->advertising &= ADVERTISED_100baseT_Full |
+				       ADVERTISED_100baseT_Half;
+		phydev->advertising |= ADVERTISED_FIBRE;
 		phydev->autoneg = AUTONEG_DISABLE;
 	}
 
@@ -339,29 +337,6 @@ static int ksz8041_config_aneg(struct phy_device *phydev)
 	}
 
 	return genphy_config_aneg(phydev);
-}
-
-static int ksz8081_config_init(struct phy_device *phydev)
-{
-	/* KSZPHY_OMSO_FACTORY_TEST is set at de-assertion of the reset line
-	 * based on the RXER (KSZ8081RNA/RND) or TXC (KSZ8081MNX/RNB) pin. If a
-	 * pull-down is missing, the factory test mode should be cleared by
-	 * manually writing a 0.
-	 */
-	phy_clear_bits(phydev, MII_KSZPHY_OMSO, KSZPHY_OMSO_FACTORY_TEST);
-
-	return kszphy_config_init(phydev);
-}
-
-static int ksz8061_config_init(struct phy_device *phydev)
-{
-	int ret;
-
-	ret = phy_write_mmd(phydev, MDIO_MMD_PMAPMD, MDIO_DEVID1, 0xB61A);
-	if (ret)
-		return ret;
-
-	return kszphy_config_init(phydev);
 }
 
 static int ksz9021_load_values_from_of(struct phy_device *phydev,
@@ -446,6 +421,9 @@ static int ksz9021_config_init(struct phy_device *phydev)
 	return 0;
 }
 
+#define MII_KSZ9031RN_MMD_CTRL_REG	0x0d
+#define MII_KSZ9031RN_MMD_REGDATA_REG	0x0e
+#define OP_DATA				1
 #define KSZ9031_PS_TO_REG		60
 
 /* Extended registers */
@@ -462,6 +440,24 @@ static int ksz9021_config_init(struct phy_device *phydev)
 /* MMD Address 0x1C */
 #define MII_KSZ9031RN_EDPD		0x23
 #define MII_KSZ9031RN_EDPD_ENABLE	BIT(0)
+
+static int ksz9031_extended_write(struct phy_device *phydev,
+				  u8 mode, u32 dev_addr, u32 regnum, u16 val)
+{
+	phy_write(phydev, MII_KSZ9031RN_MMD_CTRL_REG, dev_addr);
+	phy_write(phydev, MII_KSZ9031RN_MMD_REGDATA_REG, regnum);
+	phy_write(phydev, MII_KSZ9031RN_MMD_CTRL_REG, (mode << 14) | dev_addr);
+	return phy_write(phydev, MII_KSZ9031RN_MMD_REGDATA_REG, val);
+}
+
+static int ksz9031_extended_read(struct phy_device *phydev,
+				 u8 mode, u32 dev_addr, u32 regnum)
+{
+	phy_write(phydev, MII_KSZ9031RN_MMD_CTRL_REG, dev_addr);
+	phy_write(phydev, MII_KSZ9031RN_MMD_REGDATA_REG, regnum);
+	phy_write(phydev, MII_KSZ9031RN_MMD_CTRL_REG, (mode << 14) | dev_addr);
+	return phy_read(phydev, MII_KSZ9031RN_MMD_REGDATA_REG);
+}
 
 static int ksz9031_of_load_skew_values(struct phy_device *phydev,
 				       const struct device_node *of_node,
@@ -483,7 +479,7 @@ static int ksz9031_of_load_skew_values(struct phy_device *phydev,
 		return 0;
 
 	if (matches < numfields)
-		newval = phy_read_mmd(phydev, 2, reg);
+		newval = ksz9031_extended_read(phydev, OP_DATA, 2, reg);
 	else
 		newval = 0;
 
@@ -497,7 +493,7 @@ static int ksz9031_of_load_skew_values(struct phy_device *phydev,
 					<< (field_sz * i));
 		}
 
-	return phy_write_mmd(phydev, 2, reg, newval);
+	return ksz9031_extended_write(phydev, OP_DATA, 2, reg, newval);
 }
 
 /* Center KSZ9031RNX FLP timing at 16ms. */
@@ -505,13 +501,13 @@ static int ksz9031_center_flp_timing(struct phy_device *phydev)
 {
 	int result;
 
-	result = phy_write_mmd(phydev, 0, MII_KSZ9031RN_FLP_BURST_TX_HI,
-			       0x0006);
+	result = ksz9031_extended_write(phydev, OP_DATA, 0,
+					MII_KSZ9031RN_FLP_BURST_TX_HI, 0x0006);
 	if (result)
 		return result;
 
-	result = phy_write_mmd(phydev, 0, MII_KSZ9031RN_FLP_BURST_TX_LO,
-			       0x1A80);
+	result = ksz9031_extended_write(phydev, OP_DATA, 0,
+					MII_KSZ9031RN_FLP_BURST_TX_LO, 0x1A80);
 	if (result)
 		return result;
 
@@ -523,11 +519,11 @@ static int ksz9031_enable_edpd(struct phy_device *phydev)
 {
 	int reg;
 
-	reg = phy_read_mmd(phydev, 0x1C, MII_KSZ9031RN_EDPD);
+	reg = ksz9031_extended_read(phydev, OP_DATA, 0x1C, MII_KSZ9031RN_EDPD);
 	if (reg < 0)
 		return reg;
-	return phy_write_mmd(phydev, 0x1C, MII_KSZ9031RN_EDPD,
-			     reg | MII_KSZ9031RN_EDPD_ENABLE);
+	return ksz9031_extended_write(phydev, OP_DATA, 0x1C, MII_KSZ9031RN_EDPD,
+				      reg | MII_KSZ9031RN_EDPD_ENABLE);
 }
 
 static int ksz9031_config_init(struct phy_device *phydev)
@@ -653,7 +649,7 @@ static int ksz9131_of_load_skew_values(struct phy_device *phydev,
 		return 0;
 
 	if (matches < numfields)
-		newval = phy_read_mmd(phydev, 2, reg);
+		newval = ksz9031_extended_read(phydev, OP_DATA, 2, reg);
 	else
 		newval = 0;
 
@@ -667,7 +663,7 @@ static int ksz9131_of_load_skew_values(struct phy_device *phydev,
 					<< (field_sz * i));
 		}
 
-	return phy_write_mmd(phydev, 2, reg, newval);
+	return ksz9031_extended_write(phydev, OP_DATA, 2, reg, newval);
 }
 
 static int ksz9131_config_init(struct phy_device *phydev)
@@ -747,31 +743,6 @@ static int ksz8873mll_read_status(struct phy_device *phydev)
 
 	phydev->link = 1;
 	phydev->pause = phydev->asym_pause = 0;
-
-	return 0;
-}
-
-static int ksz9031_get_features(struct phy_device *phydev)
-{
-	int ret;
-
-	ret = genphy_read_abilities(phydev);
-	if (ret < 0)
-		return ret;
-
-	/* Silicon Errata Sheet (DS80000691D or DS80000692D):
-	 * Whenever the device's Asymmetric Pause capability is set to 1,
-	 * link-up may fail after a link-up to link-down transition.
-	 *
-	 * Workaround:
-	 * Do not enable the Asymmetric Pause capability bit.
-	 */
-	linkmode_clear_bit(ETHTOOL_LINK_MODE_Asym_Pause_BIT, phydev->supported);
-
-	/* We force setting the Pause capability as the core will force the
-	 * Asymmetric Pause capability to 1 otherwise.
-	 */
-	linkmode_set_bit(ETHTOOL_LINK_MODE_Pause_BIT, phydev->supported);
 
 	return 0;
 }
@@ -946,7 +917,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KS8737,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KS8737",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ks8737_type,
 	.config_init	= kszphy_config_init,
 	.ack_interrupt	= kszphy_ack_interrupt,
@@ -957,7 +929,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8021,
 	.phy_id_mask	= 0x00ffffff,
 	.name		= "Micrel KSZ8021 or KSZ8031",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8021_type,
 	.probe		= kszphy_probe,
 	.config_init	= kszphy_config_init,
@@ -972,7 +945,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8031,
 	.phy_id_mask	= 0x00ffffff,
 	.name		= "Micrel KSZ8031",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8021_type,
 	.probe		= kszphy_probe,
 	.config_init	= kszphy_config_init,
@@ -987,7 +961,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8041,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8041",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8041_type,
 	.probe		= kszphy_probe,
 	.config_init	= ksz8041_config_init,
@@ -1003,7 +978,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8041RNLI,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8041RNLI",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8041_type,
 	.probe		= kszphy_probe,
 	.config_init	= kszphy_config_init,
@@ -1018,7 +994,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8051,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8051",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8051_type,
 	.probe		= kszphy_probe,
 	.config_init	= kszphy_config_init,
@@ -1033,7 +1010,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8001,
 	.name		= "Micrel KSZ8001 or KS8721",
 	.phy_id_mask	= 0x00fffffc,
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8041_type,
 	.probe		= kszphy_probe,
 	.config_init	= kszphy_config_init,
@@ -1048,10 +1026,11 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8081,
 	.name		= "Micrel KSZ8081 or KSZ8091",
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz8081_type,
 	.probe		= kszphy_probe,
-	.config_init	= ksz8081_config_init,
+	.config_init	= kszphy_config_init,
 	.ack_interrupt	= kszphy_ack_interrupt,
 	.config_intr	= kszphy_config_intr,
 	.get_sset_count = kszphy_get_sset_count,
@@ -1063,8 +1042,9 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8061,
 	.name		= "Micrel KSZ8061",
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
-	/* PHY_BASIC_FEATURES */
-	.config_init	= ksz8061_config_init,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
+	.config_init	= kszphy_config_init,
 	.ack_interrupt	= kszphy_ack_interrupt,
 	.config_intr	= kszphy_config_intr,
 	.suspend	= genphy_suspend,
@@ -1073,7 +1053,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ9021,
 	.phy_id_mask	= 0x000ffffe,
 	.name		= "Micrel KSZ9021 Gigabit PHY",
-	/* PHY_GBIT_FEATURES */
+	.features	= PHY_GBIT_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz9021_type,
 	.probe		= kszphy_probe,
 	.config_init	= ksz9021_config_init,
@@ -1090,11 +1071,11 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ9031,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ9031 Gigabit PHY",
+	.features	= PHY_GBIT_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz9021_type,
 	.probe		= kszphy_probe,
-	.get_features	= ksz9031_get_features,
 	.config_init	= ksz9031_config_init,
-	.soft_reset	= genphy_soft_reset,
 	.read_status	= ksz9031_read_status,
 	.ack_interrupt	= kszphy_ack_interrupt,
 	.config_intr	= kszphy_config_intr,
@@ -1107,7 +1088,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ9131,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Microchip KSZ9131 Gigabit PHY",
-	/* PHY_GBIT_FEATURES */
+	.features	= PHY_GBIT_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.driver_data	= &ksz9021_type,
 	.probe		= kszphy_probe,
 	.config_init	= ksz9131_config_init,
@@ -1123,7 +1105,6 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8873MLL,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8873MLL Switch",
-	/* PHY_BASIC_FEATURES */
 	.config_init	= kszphy_config_init,
 	.config_aneg	= ksz8873mll_config_aneg,
 	.read_status	= ksz8873mll_read_status,
@@ -1133,7 +1114,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ886X,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ886X Switch",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.config_init	= kszphy_config_init,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
@@ -1141,7 +1123,8 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ8795,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8795",
-	/* PHY_BASIC_FEATURES */
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 	.config_init	= kszphy_config_init,
 	.config_aneg	= ksz8873mll_config_aneg,
 	.read_status	= ksz8873mll_read_status,
@@ -1151,7 +1134,7 @@ static struct phy_driver ksphy_driver[] = {
 	.phy_id		= PHY_ID_KSZ9477,
 	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Microchip KSZ9477",
-	/* PHY_GBIT_FEATURES */
+	.features	= PHY_GBIT_FEATURES,
 	.config_init	= kszphy_config_init,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,

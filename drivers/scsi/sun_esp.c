@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* sun_esp.c: ESP front-end for Sparc SBUS systems.
  *
  * Copyright (C) 2007, 2008 David S. Miller (davem@davemloft.net)
@@ -530,10 +529,11 @@ static int esp_sbus_probe(struct platform_device *op)
 	int hme = 0;
 	int ret;
 
-	if (of_node_name_eq(dp->parent, "espdma") ||
-	    of_node_name_eq(dp->parent, "dma"))
+	if (dp->parent &&
+	    (!strcmp(dp->parent->name, "espdma") ||
+	     !strcmp(dp->parent->name, "dma")))
 		dma_node = dp->parent;
-	else if (of_node_name_eq(dp, "SUNW,fas")) {
+	else if (!strcmp(dp->name, "SUNW,fas")) {
 		dma_node = op->dev.of_node;
 		hme = 1;
 	}

@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  acpi_numa.c - ACPI NUMA support
  *
  *  Copyright (C) 2002 Takayoshi Kochi <t-kochi@bq.jp.nec.com>
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
  */
 
 #define pr_fmt(fmt) "ACPI: " fmt
@@ -70,7 +84,6 @@ int acpi_map_pxm_to_node(int pxm)
 
 	return node;
 }
-EXPORT_SYMBOL(acpi_map_pxm_to_node);
 
 /**
  * acpi_map_pxm_to_online_node - Map proximity ID to online node
@@ -133,9 +146,9 @@ acpi_table_print_srat_entry(struct acpi_subtable_header *header)
 		{
 			struct acpi_srat_mem_affinity *p =
 			    (struct acpi_srat_mem_affinity *)header;
-			pr_debug("SRAT Memory (0x%llx length 0x%llx) in proximity domain %d %s%s%s\n",
-				 (unsigned long long)p->base_address,
-				 (unsigned long long)p->length,
+			pr_debug("SRAT Memory (0x%lx length 0x%lx) in proximity domain %d %s%s%s\n",
+				 (unsigned long)p->base_address,
+				 (unsigned long)p->length,
 				 p->proximity_domain,
 				 (p->flags & ACPI_SRAT_MEM_ENABLED) ?
 				 "enabled" : "disabled",
@@ -325,7 +338,7 @@ acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 }
 
 static int __init
-acpi_parse_x2apic_affinity(union acpi_subtable_headers *header,
+acpi_parse_x2apic_affinity(struct acpi_subtable_header *header,
 			   const unsigned long end)
 {
 	struct acpi_srat_x2apic_cpu_affinity *processor_affinity;
@@ -334,7 +347,7 @@ acpi_parse_x2apic_affinity(union acpi_subtable_headers *header,
 	if (!processor_affinity)
 		return -EINVAL;
 
-	acpi_table_print_srat_entry(&header->common);
+	acpi_table_print_srat_entry(header);
 
 	/* let architecture-dependent part to do it */
 	acpi_numa_x2apic_affinity_init(processor_affinity);
@@ -343,7 +356,7 @@ acpi_parse_x2apic_affinity(union acpi_subtable_headers *header,
 }
 
 static int __init
-acpi_parse_processor_affinity(union acpi_subtable_headers *header,
+acpi_parse_processor_affinity(struct acpi_subtable_header *header,
 			      const unsigned long end)
 {
 	struct acpi_srat_cpu_affinity *processor_affinity;
@@ -352,7 +365,7 @@ acpi_parse_processor_affinity(union acpi_subtable_headers *header,
 	if (!processor_affinity)
 		return -EINVAL;
 
-	acpi_table_print_srat_entry(&header->common);
+	acpi_table_print_srat_entry(header);
 
 	/* let architecture-dependent part to do it */
 	acpi_numa_processor_affinity_init(processor_affinity);
@@ -361,7 +374,7 @@ acpi_parse_processor_affinity(union acpi_subtable_headers *header,
 }
 
 static int __init
-acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
+acpi_parse_gicc_affinity(struct acpi_subtable_header *header,
 			 const unsigned long end)
 {
 	struct acpi_srat_gicc_affinity *processor_affinity;
@@ -370,7 +383,7 @@ acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
 	if (!processor_affinity)
 		return -EINVAL;
 
-	acpi_table_print_srat_entry(&header->common);
+	acpi_table_print_srat_entry(header);
 
 	/* let architecture-dependent part to do it */
 	acpi_numa_gicc_affinity_init(processor_affinity);
@@ -381,7 +394,7 @@ acpi_parse_gicc_affinity(union acpi_subtable_headers *header,
 static int __initdata parsed_numa_memblks;
 
 static int __init
-acpi_parse_memory_affinity(union acpi_subtable_headers * header,
+acpi_parse_memory_affinity(struct acpi_subtable_header * header,
 			   const unsigned long end)
 {
 	struct acpi_srat_mem_affinity *memory_affinity;
@@ -390,7 +403,7 @@ acpi_parse_memory_affinity(union acpi_subtable_headers * header,
 	if (!memory_affinity)
 		return -EINVAL;
 
-	acpi_table_print_srat_entry(&header->common);
+	acpi_table_print_srat_entry(header);
 
 	/* let architecture-dependent part to do it */
 	if (!acpi_numa_memory_affinity_init(memory_affinity))

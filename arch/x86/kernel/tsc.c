@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
@@ -186,7 +185,8 @@ static void __init cyc2ns_init_boot_cpu(void)
 /*
  * Secondary CPUs do not run through tsc_init(), so set up
  * all the scale factors for all CPUs, assuming the same
- * speed as the bootup CPU.
+ * speed as the bootup CPU. (cpufreq notifiers will fix this
+ * up if their speed diverges)
  */
 static void __init cyc2ns_init_secondary_cpus(void)
 {
@@ -283,7 +283,6 @@ int __init notsc_setup(char *str)
 __setup("notsc", notsc_setup);
 
 static int no_sched_irq_time;
-static int no_tsc_watchdog;
 
 static int __init tsc_setup(char *str)
 {
@@ -293,23 +292,20 @@ static int __init tsc_setup(char *str)
 		no_sched_irq_time = 1;
 	if (!strcmp(str, "unstable"))
 		mark_tsc_unstable("boot parameter");
-	if (!strcmp(str, "nowatchdog"))
-		no_tsc_watchdog = 1;
 	return 1;
 }
 
 __setup("tsc=", tsc_setup);
 
-#define MAX_RETRIES		5
-#define TSC_DEFAULT_THRESHOLD	0x20000
+#define MAX_RETRIES     5
+#define SMI_TRESHOLD    50000
 
 /*
- * Read TSC and the reference counters. Take care of any disturbances
+ * Read TSC and the reference counters. Take care of SMI disturbance
  */
 static u64 tsc_read_refs(u64 *p, int hpet)
 {
 	u64 t1, t2;
-	u64 thresh = tsc_khz ? tsc_khz >> 5 : TSC_DEFAULT_THRESHOLD;
 	int i;
 
 	for (i = 0; i < MAX_RETRIES; i++) {
@@ -319,7 +315,7 @@ static u64 tsc_read_refs(u64 *p, int hpet)
 		else
 			*p = acpi_pm_read_early();
 		t2 = get_cycles();
-		if ((t2 - t1) < thresh)
+		if ((t2 - t1) < SMI_TRESHOLD)
 			return t2;
 	}
 	return ULLONG_MAX;
@@ -707,15 +703,15 @@ static unsigned long pit_hpet_ptimer_calibrate_cpu(void)
 	 * zero. In each wait loop iteration we read the TSC and check
 	 * the delta to the previous read. We keep track of the min
 	 * and max values of that delta. The delta is mostly defined
-	 * by the IO time of the PIT access, so we can detect when
-	 * any disturbance happened between the two reads. If the
+	 * by the IO time of the PIT access, so we can detect when a
+	 * SMI/SMM disturbance happened between the two reads. If the
 	 * maximum time is significantly larger than the minimum time,
 	 * then we discard the result and have another try.
 	 *
 	 * 2) Reference counter. If available we use the HPET or the
 	 * PMTIMER as a reference to check the sanity of that value.
 	 * We use separate TSC readouts and check inside of the
-	 * reference read for any possible disturbance. We dicard
+	 * reference read for a SMI/SMM disturbance. We dicard
 	 * disturbed values here as well. We do that around the PIT
 	 * calibration delay loop as we have to wait for a certain
 	 * amount of time anyway.
@@ -748,7 +744,7 @@ static unsigned long pit_hpet_ptimer_calibrate_cpu(void)
 		if (ref1 == ref2)
 			continue;
 
-		/* Check, whether the sampling was disturbed */
+		/* Check, whether the sampling was disturbed by an SMI */
 		if (tsc1 == ULLONG_MAX || tsc2 == ULLONG_MAX)
 			continue;
 
@@ -940,12 +936,12 @@ void tsc_restore_sched_clock_state(void)
 }
 
 #ifdef CONFIG_CPU_FREQ
-/*
- * Frequency scaling support. Adjust the TSC based timer when the CPU frequency
+/* Frequency scaling support. Adjust the TSC based timer when the cpu frequency
  * changes.
  *
- * NOTE: On SMP the situation is not fixable in general, so simply mark the TSC
- * as unstable and give up in those cases.
+ * RED-PEN: On SMP we assume all CPUs run with the same frequency.  It's
+ * not that important because current Opteron setups do not support
+ * scaling on SMP anyroads.
  *
  * Should fix up last_tsc too. Currently gettimeofday in the
  * first tick after the change will be slightly wrong.
@@ -959,28 +955,28 @@ static int time_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
 				void *data)
 {
 	struct cpufreq_freqs *freq = data;
+	unsigned long *lpj;
 
-	if (num_online_cpus() > 1) {
-		mark_tsc_unstable("cpufreq changes on SMP");
-		return 0;
-	}
+	lpj = &boot_cpu_data.loops_per_jiffy;
+#ifdef CONFIG_SMP
+	if (!(freq->flags & CPUFREQ_CONST_LOOPS))
+		lpj = &cpu_data(freq->cpu).loops_per_jiffy;
+#endif
 
 	if (!ref_freq) {
 		ref_freq = freq->old;
-		loops_per_jiffy_ref = boot_cpu_data.loops_per_jiffy;
+		loops_per_jiffy_ref = *lpj;
 		tsc_khz_ref = tsc_khz;
 	}
-
 	if ((val == CPUFREQ_PRECHANGE  && freq->old < freq->new) ||
-	    (val == CPUFREQ_POSTCHANGE && freq->old > freq->new)) {
-		boot_cpu_data.loops_per_jiffy =
-			cpufreq_scale(loops_per_jiffy_ref, ref_freq, freq->new);
+			(val == CPUFREQ_POSTCHANGE && freq->old > freq->new)) {
+		*lpj = cpufreq_scale(loops_per_jiffy_ref, ref_freq, freq->new);
 
 		tsc_khz = cpufreq_scale(tsc_khz_ref, ref_freq, freq->new);
 		if (!(freq->flags & CPUFREQ_CONST_LOOPS))
 			mark_tsc_unstable("cpufreq changes");
 
-		set_cyc2ns_scale(tsc_khz, freq->policy->cpu, rdtsc());
+		set_cyc2ns_scale(tsc_khz, freq->cpu, rdtsc());
 	}
 
 	return 0;
@@ -1272,7 +1268,7 @@ static DECLARE_DELAYED_WORK(tsc_irqwork, tsc_refine_calibration_work);
  */
 static void tsc_refine_calibration_work(struct work_struct *work)
 {
-	static u64 tsc_start = ULLONG_MAX, ref_start;
+	static u64 tsc_start = -1, ref_start;
 	static int hpet;
 	u64 tsc_stop, ref_stop, delta;
 	unsigned long freq;
@@ -1287,15 +1283,14 @@ static void tsc_refine_calibration_work(struct work_struct *work)
 	 * delayed the first time we expire. So set the workqueue
 	 * again once we know timers are working.
 	 */
-	if (tsc_start == ULLONG_MAX) {
-restart:
+	if (tsc_start == -1) {
 		/*
 		 * Only set hpet once, to avoid mixing hardware
 		 * if the hpet becomes enabled later.
 		 */
 		hpet = is_hpet_enabled();
-		tsc_start = tsc_read_refs(&ref_start, hpet);
 		schedule_delayed_work(&tsc_irqwork, HZ);
+		tsc_start = tsc_read_refs(&ref_start, hpet);
 		return;
 	}
 
@@ -1305,9 +1300,9 @@ restart:
 	if (ref_start == ref_stop)
 		goto out;
 
-	/* Check, whether the sampling was disturbed */
-	if (tsc_stop == ULLONG_MAX)
-		goto restart;
+	/* Check, whether the sampling was disturbed by an SMI */
+	if (tsc_start == ULLONG_MAX || tsc_stop == ULLONG_MAX)
+		goto out;
 
 	delta = tsc_stop - tsc_start;
 	delta *= 1000000LL;
@@ -1352,7 +1347,7 @@ static int __init init_tsc_clocksource(void)
 	if (tsc_unstable)
 		goto unreg;
 
-	if (tsc_clocksource_reliable || no_tsc_watchdog)
+	if (tsc_clocksource_reliable)
 		clocksource_tsc.flags &= ~CLOCK_SOURCE_MUST_VERIFY;
 
 	if (boot_cpu_has(X86_FEATURE_NONSTOP_TSC_S3))

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 config BE2NET
 	tristate "ServerEngines' 10Gbps NIC - BladeEngine"
 	depends on PCI

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Routines for tracking a legacy ISA bridge
  *
@@ -7,6 +6,11 @@
  * Some bits and pieces moved over from pci_64.c
  *
  * Copyrigh 2003 Anton Blanchard <anton@au.ibm.com>, IBM Corp.
+ *
+ *      This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
  */
 
 #define DEBUG
@@ -323,7 +327,8 @@ static int isa_bridge_notify(struct notifier_block *nb, unsigned long action,
 		/* Check if we have no ISA device, and this happens to be one,
 		 * register it as such if it has an OF device
 		 */
-		if (!isa_bridge_devnode && of_node_is_type(devnode, "isa"))
+		if (!isa_bridge_devnode && devnode && devnode->type &&
+		    !strcmp(devnode->type, "isa"))
 			isa_bridge_find_late(pdev, devnode);
 
 		return 0;

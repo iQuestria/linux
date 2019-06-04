@@ -26,13 +26,15 @@
 #ifndef MOD_INFO_PACKET_H_
 #define MOD_INFO_PACKET_H_
 
-#include "mod_shared.h"
+struct info_packet_inputs {
+	const struct dc_stream_state *pStream;
+};
 
-//Forward Declarations
-struct dc_stream_state;
-struct dc_info_packet;
+struct info_packets {
+	struct dc_info_packet *pVscInfoPacket;
+};
 
-void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
-		struct dc_info_packet *info_packet);
+void mod_build_infopackets(struct info_packet_inputs *inputs,
+		struct info_packets *info_packets);
 
 #endif

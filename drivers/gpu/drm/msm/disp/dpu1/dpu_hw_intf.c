@@ -13,6 +13,7 @@
 #include "dpu_hwio.h"
 #include "dpu_hw_catalog.h"
 #include "dpu_hw_intf.h"
+#include "dpu_dbg.h"
 #include "dpu_kms.h"
 
 #define INTF_TIMING_ENGINE_EN           0x000
@@ -264,7 +265,10 @@ static void _setup_intf_ops(struct dpu_hw_intf_ops *ops,
 	ops->get_line_count = dpu_hw_intf_get_line_count;
 }
 
-static struct dpu_hw_blk_ops dpu_hw_ops;
+static struct dpu_hw_blk_ops dpu_hw_ops = {
+	.start = NULL,
+	.stop = NULL,
+};
 
 struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
 		void __iomem *addr,
@@ -272,6 +276,7 @@ struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
 {
 	struct dpu_hw_intf *c;
 	struct dpu_intf_cfg *cfg;
+	int rc;
 
 	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
@@ -292,9 +297,18 @@ struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
 	c->mdss = m;
 	_setup_intf_ops(&c->ops, c->cap->features);
 
-	dpu_hw_blk_init(&c->base, DPU_HW_BLK_INTF, idx, &dpu_hw_ops);
+	rc = dpu_hw_blk_init(&c->base, DPU_HW_BLK_INTF, idx, &dpu_hw_ops);
+	if (rc) {
+		DPU_ERROR("failed to init hw blk %d\n", rc);
+		goto blk_init_error;
+	}
 
 	return c;
+
+blk_init_error:
+	kzfree(c);
+
+	return ERR_PTR(rc);
 }
 
 void dpu_hw_intf_destroy(struct dpu_hw_intf *intf)

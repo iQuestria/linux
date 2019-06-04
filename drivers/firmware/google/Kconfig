@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menuconfig GOOGLE_FIRMWARE
 	bool "Google Firmware Drivers"
 	default n

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Generic stack depot for storing stack traces.
  *
@@ -17,6 +16,16 @@
  * Copyright (C) 2016 Google, Inc.
  *
  * Based on code by Dmitry Chernenkov.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
  */
 
 #include <linux/gfp.h>
@@ -185,52 +194,40 @@ static inline struct stack_record *find_stack(struct stack_record *bucket,
 	return NULL;
 }
 
-/**
- * stack_depot_fetch - Fetch stack entries from a depot
- *
- * @handle:		Stack depot handle which was returned from
- *			stack_depot_save().
- * @entries:		Pointer to store the entries address
- *
- * Return: The number of trace entries for this depot.
- */
-unsigned int stack_depot_fetch(depot_stack_handle_t handle,
-			       unsigned long **entries)
+void depot_fetch_stack(depot_stack_handle_t handle, struct stack_trace *trace)
 {
 	union handle_parts parts = { .handle = handle };
 	void *slab = stack_slabs[parts.slabindex];
 	size_t offset = parts.offset << STACK_ALLOC_ALIGN;
 	struct stack_record *stack = slab + offset;
 
-	*entries = stack->entries;
-	return stack->size;
+	trace->nr_entries = trace->max_entries = stack->size;
+	trace->entries = stack->entries;
+	trace->skip = 0;
 }
-EXPORT_SYMBOL_GPL(stack_depot_fetch);
+EXPORT_SYMBOL_GPL(depot_fetch_stack);
 
 /**
- * stack_depot_save - Save a stack trace from an array
+ * depot_save_stack - save stack in a stack depot.
+ * @trace - the stacktrace to save.
+ * @alloc_flags - flags for allocating additional memory if required.
  *
- * @entries:		Pointer to storage array
- * @nr_entries:		Size of the storage array
- * @alloc_flags:	Allocation gfp flags
- *
- * Return: The handle of the stack struct stored in depot
+ * Returns the handle of the stack struct stored in depot.
  */
-depot_stack_handle_t stack_depot_save(unsigned long *entries,
-				      unsigned int nr_entries,
-				      gfp_t alloc_flags)
+depot_stack_handle_t depot_save_stack(struct stack_trace *trace,
+				    gfp_t alloc_flags)
 {
-	struct stack_record *found = NULL, **bucket;
+	u32 hash;
 	depot_stack_handle_t retval = 0;
+	struct stack_record *found = NULL, **bucket;
+	unsigned long flags;
 	struct page *page = NULL;
 	void *prealloc = NULL;
-	unsigned long flags;
-	u32 hash;
 
-	if (unlikely(nr_entries == 0))
+	if (unlikely(trace->nr_entries == 0))
 		goto fast_exit;
 
-	hash = hash_stack(entries, nr_entries);
+	hash = hash_stack(trace->entries, trace->nr_entries);
 	bucket = &stack_table[hash & STACK_HASH_MASK];
 
 	/*
@@ -238,8 +235,8 @@ depot_stack_handle_t stack_depot_save(unsigned long *entries,
 	 * The smp_load_acquire() here pairs with smp_store_release() to
 	 * |bucket| below.
 	 */
-	found = find_stack(smp_load_acquire(bucket), entries,
-			   nr_entries, hash);
+	found = find_stack(smp_load_acquire(bucket), trace->entries,
+			   trace->nr_entries, hash);
 	if (found)
 		goto exit;
 
@@ -267,10 +264,10 @@ depot_stack_handle_t stack_depot_save(unsigned long *entries,
 
 	spin_lock_irqsave(&depot_lock, flags);
 
-	found = find_stack(*bucket, entries, nr_entries, hash);
+	found = find_stack(*bucket, trace->entries, trace->nr_entries, hash);
 	if (!found) {
 		struct stack_record *new =
-			depot_alloc_stack(entries, nr_entries,
+			depot_alloc_stack(trace->entries, trace->nr_entries,
 					  hash, &prealloc, alloc_flags);
 		if (new) {
 			new->next = *bucket;
@@ -300,4 +297,4 @@ exit:
 fast_exit:
 	return retval;
 }
-EXPORT_SYMBOL_GPL(stack_depot_save);
+EXPORT_SYMBOL_GPL(depot_save_stack);

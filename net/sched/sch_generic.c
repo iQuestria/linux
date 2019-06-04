@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * net/sched/sch_generic.c	Generic packet scheduler routines.
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  *              Jamal Hadi Salim, <hadi@cyberus.ca> 990601
@@ -28,7 +32,6 @@
 #include <net/pkt_sched.h>
 #include <net/dst.h>
 #include <trace/events/qdisc.h>
-#include <trace/events/net.h>
 #include <net/xfrm.h>
 
 /* Qdisc to use by default */
@@ -115,36 +118,52 @@ static inline void qdisc_enqueue_skb_bad_txq(struct Qdisc *q,
 		spin_unlock(lock);
 }
 
-static inline void dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
+static inline int __dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
 {
-	spinlock_t *lock = NULL;
+	while (skb) {
+		struct sk_buff *next = skb->next;
 
-	if (q->flags & TCQ_F_NOLOCK) {
-		lock = qdisc_lock(q);
-		spin_lock(lock);
+		__skb_queue_tail(&q->gso_skb, skb);
+		q->qstats.requeues++;
+		qdisc_qstats_backlog_inc(q, skb);
+		q->q.qlen++;	/* it's still part of the queue */
+
+		skb = next;
 	}
+	__netif_schedule(q);
 
+	return 0;
+}
+
+static inline int dev_requeue_skb_locked(struct sk_buff *skb, struct Qdisc *q)
+{
+	spinlock_t *lock = qdisc_lock(q);
+
+	spin_lock(lock);
 	while (skb) {
 		struct sk_buff *next = skb->next;
 
 		__skb_queue_tail(&q->gso_skb, skb);
 
-		/* it's still part of the queue */
-		if (qdisc_is_percpu_stats(q)) {
-			qdisc_qstats_cpu_requeues_inc(q);
-			qdisc_qstats_cpu_backlog_inc(q, skb);
-			qdisc_qstats_cpu_qlen_inc(q);
-		} else {
-			q->qstats.requeues++;
-			qdisc_qstats_backlog_inc(q, skb);
-			q->q.qlen++;
-		}
+		qdisc_qstats_cpu_requeues_inc(q);
+		qdisc_qstats_cpu_backlog_inc(q, skb);
+		qdisc_qstats_cpu_qlen_inc(q);
 
 		skb = next;
 	}
-	if (lock)
-		spin_unlock(lock);
+	spin_unlock(lock);
+
 	__netif_schedule(q);
+
+	return 0;
+}
+
+static inline int dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
+{
+	if (q->flags & TCQ_F_NOLOCK)
+		return dev_requeue_skb_locked(skb, q);
+	else
+		return __dev_requeue_skb(skb, q);
 }
 
 static void try_bulk_dequeue_skb(struct Qdisc *q,
@@ -438,7 +457,6 @@ static void dev_watchdog(struct timer_list *t)
 			}
 
 			if (some_queue_timedout) {
-				trace_net_dev_xmit_timeout(dev, i);
 				WARN_ONCE(1, KERN_INFO "NETDEV WATCHDOG: %s (%s): transmit queue %u timed out\n",
 				       dev->name, netdev_drivername(dev), i);
 				dev->netdev_ops->ndo_tx_timeout(dev);
@@ -482,7 +500,7 @@ static void dev_watchdog_down(struct net_device *dev)
  *	netif_carrier_on - set carrier
  *	@dev: network device
  *
- * Device has detected acquisition of carrier.
+ * Device has detected that carrier.
  */
 void netif_carrier_on(struct net_device *dev)
 {
@@ -541,7 +559,7 @@ struct Qdisc_ops noop_qdisc_ops __read_mostly = {
 };
 
 static struct netdev_queue noop_netdev_queue = {
-	RCU_POINTER_INITIALIZER(qdisc, &noop_qdisc),
+	.qdisc		=	&noop_qdisc,
 	.qdisc_sleeping	=	&noop_qdisc,
 };
 
@@ -627,7 +645,11 @@ static int pfifo_fast_enqueue(struct sk_buff *skb, struct Qdisc *qdisc,
 	if (unlikely(err))
 		return qdisc_drop_cpu(skb, qdisc, to_free);
 
-	qdisc_update_stats_at_enqueue(qdisc, pkt_len);
+	qdisc_qstats_cpu_qlen_inc(qdisc);
+	/* Note: skb can not be used after skb_array_produce(),
+	 * so we better not use qdisc_qstats_cpu_backlog_inc()
+	 */
+	this_cpu_add(qdisc->cpu_qstats->backlog, pkt_len);
 	return NET_XMIT_SUCCESS;
 }
 
@@ -646,9 +668,9 @@ static struct sk_buff *pfifo_fast_dequeue(struct Qdisc *qdisc)
 		skb = __skb_array_consume(q);
 	}
 	if (likely(skb)) {
-		qdisc_update_stats_at_dequeue(qdisc, skb);
-	} else {
-		qdisc->empty = true;
+		qdisc_qstats_cpu_backlog_dec(qdisc, skb);
+		qdisc_bstats_cpu_update(qdisc, skb);
+		qdisc_qstats_cpu_qlen_dec(qdisc);
 	}
 
 	return skb;
@@ -859,7 +881,6 @@ struct Qdisc *qdisc_alloc(struct netdev_queue *dev_queue,
 	sch->enqueue = ops->enqueue;
 	sch->dequeue = ops->dequeue;
 	sch->dev_queue = dev_queue;
-	sch->empty = true;
 	dev_hold(dev);
 	refcount_set(&sch->refcnt, 1);
 
@@ -1345,17 +1366,13 @@ static void mini_qdisc_rcu_func(struct rcu_head *head)
 void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
 			  struct tcf_proto *tp_head)
 {
-	/* Protected with chain0->filter_chain_lock.
-	 * Can't access chain directly because tp_head can be NULL.
-	 */
-	struct mini_Qdisc *miniq_old =
-		rcu_dereference_protected(*miniqp->p_miniq, 1);
+	struct mini_Qdisc *miniq_old = rtnl_dereference(*miniqp->p_miniq);
 	struct mini_Qdisc *miniq;
 
 	if (!tp_head) {
 		RCU_INIT_POINTER(*miniqp->p_miniq, NULL);
 		/* Wait for flying RCU callback before it is freed. */
-		rcu_barrier();
+		rcu_barrier_bh();
 		return;
 	}
 
@@ -1363,10 +1380,10 @@ void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
 		&miniqp->miniq1 : &miniqp->miniq2;
 
 	/* We need to make sure that readers won't see the miniq
-	 * we are about to modify. So wait until previous call_rcu callback
+	 * we are about to modify. So wait until previous call_rcu_bh callback
 	 * is done.
 	 */
-	rcu_barrier();
+	rcu_barrier_bh();
 	miniq->filter_list = tp_head;
 	rcu_assign_pointer(*miniqp->p_miniq, miniq);
 
@@ -1375,7 +1392,7 @@ void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
 		 * block potential new user of miniq_old until all readers
 		 * are not seeing it.
 		 */
-		call_rcu(&miniq_old->rcu, mini_qdisc_rcu_func);
+		call_rcu_bh(&miniq_old->rcu, mini_qdisc_rcu_func);
 }
 EXPORT_SYMBOL(mini_qdisc_pair_swap);
 

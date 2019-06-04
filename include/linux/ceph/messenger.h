@@ -323,8 +323,7 @@ struct ceph_connection {
 };
 
 
-extern const char *ceph_pr_addr(const struct ceph_entity_addr *addr);
-
+extern const char *ceph_pr_addr(const struct sockaddr_storage *ss);
 extern int ceph_parse_ips(const char *c, const char *end,
 			  struct ceph_entity_addr *addr,
 			  int max_count, int *count);

@@ -1153,7 +1153,7 @@ static int ethoc_probe(struct platform_device *pdev)
 		const void *mac;
 
 		mac = of_get_mac_address(pdev->dev.of_node);
-		if (!IS_ERR(mac))
+		if (mac)
 			ether_addr_copy(netdev->dev_addr, mac);
 		priv->phy_id = -1;
 	}

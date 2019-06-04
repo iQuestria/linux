@@ -15,9 +15,9 @@
 #include <linux/smp.h>
 #include <linux/version.h>
 #include <linux/vt_kern.h>
+#include <linux/kernel.h>
 #include <linux/extable.h>
 #include <linux/uaccess.h>
-#include <linux/perf_event.h>
 
 #include <asm/hardirq.h>
 #include <asm/mmu_context.h>
@@ -82,7 +82,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long write,
 
 		unsigned long pgd_base;
 
-		pgd_base = (unsigned long)__va(get_pgd());
+		pgd_base = tlb_get_pgd();
 		pgd = (pgd_t *)pgd_base + offset;
 		pgd_k = init_mm.pgd + offset;
 
@@ -107,8 +107,6 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long write,
 		return;
 	}
 #endif
-
-	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, regs, address);
 	/*
 	 * If we're in an interrupt or have no user
 	 * context, we must not take the fault..
@@ -156,15 +154,10 @@ good_area:
 			goto bad_area;
 		BUG();
 	}
-	if (fault & VM_FAULT_MAJOR) {
+	if (fault & VM_FAULT_MAJOR)
 		tsk->maj_flt++;
-		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MAJ, 1, regs,
-			      address);
-	} else {
+	else
 		tsk->min_flt++;
-		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs,
-			      address);
-	}
 
 	up_read(&mm->mmap_sem);
 	return;
@@ -179,6 +172,8 @@ bad_area:
 bad_area_nosemaphore:
 	/* User mode accesses just cause a SIGSEGV */
 	if (user_mode(regs)) {
+		tsk->thread.address = address;
+		tsk->thread.error_code = write;
 		force_sig_fault(SIGSEGV, si_code, (void __user *)address, current);
 		return;
 	}
@@ -193,8 +188,8 @@ no_context:
 	 * terminate things with extreme prejudice.
 	 */
 	bust_spinlocks(1);
-	pr_alert("Unable to handle kernel paging request at virtual "
-		 "address 0x%08lx, pc: 0x%08lx\n", address, regs->pc);
+	pr_alert("Unable to %s at vaddr: %08lx, epc: %08lx\n",
+		 __func__, address, regs->pc);
 	die_if_kernel("Oops", regs, write);
 
 out_of_memory:
@@ -212,5 +207,6 @@ do_sigbus:
 	if (!user_mode(regs))
 		goto no_context;
 
+	tsk->thread.address = address;
 	force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address, current);
 }

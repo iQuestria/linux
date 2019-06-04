@@ -46,7 +46,7 @@ static int s390_call__parse(struct arch *arch, struct ins_operands *ops,
 }
 
 static int call__scnprintf(struct ins *ins, char *bf, size_t size,
-			   struct ins_operands *ops, int max_ins_name);
+			   struct ins_operands *ops);
 
 static struct ins_ops s390_call_ops = {
 	.parse	   = s390_call__parse,

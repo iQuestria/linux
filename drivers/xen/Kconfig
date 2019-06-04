@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menu "Xen driver support"
 	depends on XEN
 
@@ -340,8 +339,5 @@ config XEN_SYMS
 
 config XEN_HAVE_VPMU
        bool
-
-config XEN_FRONT_PGDIR_SHBUF
-	tristate
 
 endmenu

@@ -133,11 +133,9 @@ static inline void modify_domain(unsigned dom, unsigned type)	{ }
  * instructions (inline assembly)
  */
 #ifdef CONFIG_CPU_USE_DOMAINS
-#define TUSER(instr)		TUSERCOND(instr, )
-#define TUSERCOND(instr, cond)	#instr "t" #cond
+#define TUSER(instr)	#instr "t"
 #else
-#define TUSER(instr)		TUSERCOND(instr, )
-#define TUSERCOND(instr, cond)	#instr #cond
+#define TUSER(instr)	#instr
 #endif
 
 #else /* __ASSEMBLY__ */

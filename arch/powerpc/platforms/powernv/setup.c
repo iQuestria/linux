@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerNV setup code.
  *
  * Copyright 2011 IBM Corp.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #undef DEBUG
@@ -397,10 +401,7 @@ static void __init pnv_setup_machdep_opal(void)
 	/* ppc_md.system_reset_exception gets filled in by pnv_smp_init() */
 	ppc_md.machine_check_exception = opal_machine_check;
 	ppc_md.mce_check_early_recovery = opal_mce_check_early_recovery;
-	if (opal_check_token(OPAL_HANDLE_HMI2))
-		ppc_md.hmi_exception_early = opal_hmi_exception_early2;
-	else
-		ppc_md.hmi_exception_early = opal_hmi_exception_early;
+	ppc_md.hmi_exception_early = opal_hmi_exception_early;
 	ppc_md.handle_hmi_exception = opal_handle_hmi_exception;
 }
 

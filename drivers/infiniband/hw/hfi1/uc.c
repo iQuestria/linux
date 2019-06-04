@@ -271,8 +271,7 @@ int hfi1_make_uc_req(struct rvt_qp *qp, struct hfi1_pkt_state *ps)
 	ps->s_txreq->ss = &qp->s_sge;
 	ps->s_txreq->s_cur_size = len;
 	hfi1_make_ruc_header(qp, ohdr, bth0 | (qp->s_state << 24),
-			     qp->remote_qpn, mask_psn(qp->s_psn++),
-			     middle, ps);
+			     mask_psn(qp->s_psn++), middle, ps);
 	return 1;
 
 done_free_tx:
@@ -322,7 +321,7 @@ void hfi1_uc_rcv(struct hfi1_packet *packet)
 	if (hfi1_ruc_check_hdr(ibp, packet))
 		return;
 
-	process_ecn(qp, packet);
+	process_ecn(qp, packet, true);
 
 	psn = ib_bth_get_psn(ohdr);
 	/* Compare the PSN verses the expected PSN. */

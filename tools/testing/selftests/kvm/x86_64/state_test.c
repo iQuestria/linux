@@ -22,6 +22,8 @@
 
 #define VCPU_ID		5
 
+static bool have_nested_state;
+
 void l2_guest_code(void)
 {
 	GUEST_SYNC(6);
@@ -120,6 +122,7 @@ void guest_code(struct vmx_pages *vmx_pages)
 
 int main(int argc, char *argv[])
 {
+	struct vmx_pages *vmx_pages = NULL;
 	vm_vaddr_t vmx_pages_gva = 0;
 
 	struct kvm_regs regs1, regs2;
@@ -129,6 +132,8 @@ int main(int argc, char *argv[])
 	struct ucall uc;
 	int stage;
 
+	struct kvm_cpuid_entry2 *entry = kvm_get_supported_cpuid_entry(1);
+
 	/* Create VM */
 	vm = vm_create_default(VCPU_ID, 0, guest_code);
 	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
@@ -137,7 +142,7 @@ int main(int argc, char *argv[])
 	vcpu_regs_get(vm, VCPU_ID, &regs1);
 
 	if (kvm_check_cap(KVM_CAP_NESTED_STATE)) {
-		vcpu_alloc_vmx(vm, &vmx_pages_gva);
+		vmx_pages = vcpu_alloc_vmx(vm, &vmx_pages_gva);
 		vcpu_args_set(vm, VCPU_ID, 1, vmx_pages_gva);
 	} else {
 		printf("will skip nested state checks\n");
@@ -147,10 +152,12 @@ int main(int argc, char *argv[])
 	for (stage = 1;; stage++) {
 		_vcpu_run(vm, VCPU_ID);
 		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-			    "Stage %d: unexpected exit reason: %u (%s),\n",
-			    stage, run->exit_reason,
+			    "Unexpected exit reason: %u (%s),\n",
+			    run->exit_reason,
 			    exit_reason_str(run->exit_reason));
 
+		memset(&regs1, 0, sizeof(regs1));
+		vcpu_regs_get(vm, VCPU_ID, &regs1);
 		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
 			TEST_ASSERT(false, "%s at %s:%d", (const char *)uc.args[0],
@@ -170,9 +177,6 @@ int main(int argc, char *argv[])
 			    stage, (ulong)uc.args[1]);
 
 		state = vcpu_save_state(vm, VCPU_ID);
-		memset(&regs1, 0, sizeof(regs1));
-		vcpu_regs_get(vm, VCPU_ID, &regs1);
-
 		kvm_vm_release(vm);
 
 		/* Restore state in a new VM.  */

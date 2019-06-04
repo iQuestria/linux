@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Coda multi-standard codec IP - BIT processor functions
  *
@@ -6,6 +5,11 @@
  *    Javier Martin, <javier.martin@vista-silicon.com>
  *    Xavier Duret
  * Copyright (C) 2012-2014 Philipp Zabel, Pengutronix
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -249,6 +253,7 @@ void coda_fill_bitstream(struct coda_ctx *ctx, struct list_head *buffer_list)
 {
 	struct vb2_v4l2_buffer *src_buf;
 	struct coda_buffer_meta *meta;
+	unsigned long flags;
 	u32 start;
 
 	if (ctx->bit_stream_param & CODA_BIT_STREAM_END_FLAG)
@@ -263,23 +268,6 @@ void coda_fill_bitstream(struct coda_ctx *ctx, struct list_head *buffer_list)
 		if (ctx->codec->src_fourcc == V4L2_PIX_FMT_JPEG &&
 		    ctx->num_metas > 1)
 			break;
-
-		if (ctx->num_internal_frames &&
-		    ctx->num_metas >= ctx->num_internal_frames) {
-			meta = list_first_entry(&ctx->buffer_meta_list,
-						struct coda_buffer_meta, list);
-
-			/*
-			 * If we managed to fill in at least a full reorder
-			 * window of buffers (num_internal_frames is a
-			 * conservative estimate for this) and the bitstream
-			 * prefetcher has at least 2 256 bytes periods beyond
-			 * the first buffer to fetch, we can safely stop queuing
-			 * in order to limit the decoder drain latency.
-			 */
-			if (coda_bitstream_can_fetch_past(ctx, meta->end))
-				break;
-		}
 
 		src_buf = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
 
@@ -311,7 +299,8 @@ void coda_fill_bitstream(struct coda_ctx *ctx, struct list_head *buffer_list)
 		}
 
 		/* Buffer start position */
-		start = ctx->bitstream_fifo.kfifo.in;
+		start = ctx->bitstream_fifo.kfifo.in &
+			ctx->bitstream_fifo.kfifo.mask;
 
 		if (coda_bitstream_try_queue(ctx, src_buf)) {
 			/*
@@ -326,12 +315,15 @@ void coda_fill_bitstream(struct coda_ctx *ctx, struct list_head *buffer_list)
 				meta->timecode = src_buf->timecode;
 				meta->timestamp = src_buf->vb2_buf.timestamp;
 				meta->start = start;
-				meta->end = ctx->bitstream_fifo.kfifo.in;
-				spin_lock(&ctx->buffer_meta_lock);
+				meta->end = ctx->bitstream_fifo.kfifo.in &
+					    ctx->bitstream_fifo.kfifo.mask;
+				spin_lock_irqsave(&ctx->buffer_meta_lock,
+						  flags);
 				list_add_tail(&meta->list,
 					      &ctx->buffer_meta_list);
 				ctx->num_metas++;
-				spin_unlock(&ctx->buffer_meta_lock);
+				spin_unlock_irqrestore(&ctx->buffer_meta_lock,
+						       flags);
 
 				trace_coda_bit_queue(ctx, src_buf, meta);
 			}
@@ -721,7 +713,8 @@ static void coda_setup_iram(struct coda_ctx *ctx)
 
 out:
 	if (!(iram_info->axi_sram_use & CODA7_USE_HOST_IP_ENABLE))
-		coda_dbg(1, ctx, "IRAM smaller than needed\n");
+		v4l2_dbg(1, coda_debug, &ctx->dev->v4l2_dev,
+			 "IRAM smaller than needed\n");
 
 	if (dev->devtype->product == CODA_HX4 ||
 	    dev->devtype->product == CODA_7541) {
@@ -998,19 +991,16 @@ static int coda_start_encoding(struct coda_ctx *ctx)
 		else
 			coda_write(dev, CODA_STD_H264,
 				   CODA_CMD_ENC_SEQ_COD_STD);
-		value = ((ctx->params.h264_disable_deblocking_filter_idc &
-			  CODA_264PARAM_DISABLEDEBLK_MASK) <<
-			 CODA_264PARAM_DISABLEDEBLK_OFFSET) |
-			((ctx->params.h264_slice_alpha_c0_offset_div2 &
-			  CODA_264PARAM_DEBLKFILTEROFFSETALPHA_MASK) <<
-			 CODA_264PARAM_DEBLKFILTEROFFSETALPHA_OFFSET) |
-			((ctx->params.h264_slice_beta_offset_div2 &
-			  CODA_264PARAM_DEBLKFILTEROFFSETBETA_MASK) <<
-			 CODA_264PARAM_DEBLKFILTEROFFSETBETA_OFFSET) |
-			(ctx->params.h264_constrained_intra_pred_flag <<
-			 CODA_264PARAM_CONSTRAINEDINTRAPREDFLAG_OFFSET) |
-			(ctx->params.h264_chroma_qp_index_offset &
-			 CODA_264PARAM_CHROMAQPOFFSET_MASK);
+		if (ctx->params.h264_deblk_enabled) {
+			value = ((ctx->params.h264_deblk_alpha &
+				  CODA_264PARAM_DEBLKFILTEROFFSETALPHA_MASK) <<
+				 CODA_264PARAM_DEBLKFILTEROFFSETALPHA_OFFSET) |
+				((ctx->params.h264_deblk_beta &
+				  CODA_264PARAM_DEBLKFILTEROFFSETBETA_MASK) <<
+				 CODA_264PARAM_DEBLKFILTEROFFSETBETA_OFFSET);
+		} else {
+			value = 1 << CODA_264PARAM_DISABLEDEBLK_OFFSET;
+		}
 		coda_write(dev, value, CODA_CMD_ENC_SEQ_264_PARA);
 		break;
 	case V4L2_PIX_FMT_JPEG:
@@ -1210,12 +1200,6 @@ static int coda_start_encoding(struct coda_ctx *ctx)
 		v4l2_err(v4l2_dev, "CODA_COMMAND_SET_FRAME_BUF timeout\n");
 		goto out;
 	}
-
-	coda_dbg(1, ctx, "start encoding %dx%d %4.4s->%4.4s @ %d/%d Hz\n",
-		 q_data_src->rect.width, q_data_src->rect.height,
-		 (char *)&ctx->codec->src_fourcc, (char *)&dst_fourcc,
-		 ctx->params.framerate & 0xffff,
-		 (ctx->params.framerate >> 16) + 1);
 
 	/* Save stream headers */
 	buf = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
@@ -1478,7 +1462,8 @@ static void coda_finish_encode(struct coda_ctx *ctx)
 		vb2_set_plane_payload(&dst_buf->vb2_buf, 0, wr_ptr - start_ptr);
 	}
 
-	coda_dbg(1, ctx, "frame size = %u\n", wr_ptr - start_ptr);
+	v4l2_dbg(1, coda_debug, &ctx->dev->v4l2_dev, "frame size = %u\n",
+		 wr_ptr - start_ptr);
 
 	coda_read(dev, CODA_RET_ENC_PIC_SLICE_NUM);
 	coda_read(dev, CODA_RET_ENC_PIC_FLAG);
@@ -1507,9 +1492,11 @@ static void coda_finish_encode(struct coda_ctx *ctx)
 	if (ctx->gopcounter < 0)
 		ctx->gopcounter = ctx->params.gop_size - 1;
 
-	coda_dbg(1, ctx, "job finished: encoded %c frame (%d)\n",
-		 (dst_buf->flags & V4L2_BUF_FLAG_KEYFRAME) ? 'I' : 'P',
-		 dst_buf->sequence);
+	v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+		"job finished: encoding frame (%d) (%s)\n",
+		dst_buf->sequence,
+		(dst_buf->flags & V4L2_BUF_FLAG_KEYFRAME) ?
+		"KEYFRAME" : "PFRAME");
 }
 
 static void coda_seq_end_work(struct work_struct *work)
@@ -1523,7 +1510,9 @@ static void coda_seq_end_work(struct work_struct *work)
 	if (ctx->initialized == 0)
 		goto out;
 
-	coda_dbg(1, ctx, "%s: sent command 'SEQ_END' to coda\n", __func__);
+	v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+		 "%d: %s: sent command 'SEQ_END' to coda\n", ctx->idx,
+		 __func__);
 	if (coda_command_sync(ctx, CODA_COMMAND_SEQ_END)) {
 		v4l2_err(&dev->v4l2_dev,
 			 "CODA_COMMAND_SEQ_END failed\n");
@@ -1666,7 +1655,8 @@ static int __coda_start_decoding(struct coda_ctx *ctx)
 	u32 val;
 	int ret;
 
-	coda_dbg(1, ctx, "Video Data Order Adapter: %s\n",
+	v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+		 "Video Data Order Adapter: %s\n",
 		 ctx->use_vdoa ? "Enabled" : "Disabled");
 
 	/* Start decoding */
@@ -1746,7 +1736,7 @@ static int __coda_start_decoding(struct coda_ctx *ctx)
 
 	if (coda_read(dev, CODA_RET_DEC_SEQ_SUCCESS) == 0) {
 		v4l2_err(&dev->v4l2_dev,
-			"CODA_COMMAND_SEQ_INIT failed, error code = 0x%x\n",
+			"CODA_COMMAND_SEQ_INIT failed, error code = %d\n",
 			coda_read(dev, CODA_RET_DEC_SEQ_ERR_REASON));
 		return -EAGAIN;
 	}
@@ -1770,7 +1760,8 @@ static int __coda_start_decoding(struct coda_ctx *ctx)
 	width = round_up(width, 16);
 	height = round_up(height, 16);
 
-	coda_dbg(1, ctx, "start decoding: %dx%d\n", width, height);
+	v4l2_dbg(1, coda_debug, &dev->v4l2_dev, "%s instance %d now: %dx%d\n",
+		 __func__, ctx->idx, width, height);
 
 	ctx->num_internal_frames = coda_read(dev, CODA_RET_DEC_SEQ_FRAME_NEED);
 	/*
@@ -1888,6 +1879,7 @@ static int coda_prepare_decode(struct coda_ctx *ctx)
 	struct coda_dev *dev = ctx->dev;
 	struct coda_q_data *q_data_dst;
 	struct coda_buffer_meta *meta;
+	unsigned long flags;
 	u32 rot_mode = 0;
 	u32 reg_addr, reg_stride;
 
@@ -1901,7 +1893,8 @@ static int coda_prepare_decode(struct coda_ctx *ctx)
 
 	if (coda_get_bitstream_payload(ctx) < 512 &&
 	    (!(ctx->bit_stream_param & CODA_BIT_STREAM_END_FLAG))) {
-		coda_dbg(1, ctx, "bitstream payload: %d, skipping\n",
+		v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+			 "bitstream payload: %d, skipping\n",
 			 coda_get_bitstream_payload(ctx));
 		v4l2_m2m_job_finish(ctx->dev->m2m_dev, ctx->fh.m2m_ctx);
 		return -EAGAIN;
@@ -1980,14 +1973,15 @@ static int coda_prepare_decode(struct coda_ctx *ctx)
 		coda_write(dev, ctx->iram_info.axi_sram_use,
 				CODA7_REG_BIT_AXI_SRAM_USE);
 
-	spin_lock(&ctx->buffer_meta_lock);
+	spin_lock_irqsave(&ctx->buffer_meta_lock, flags);
 	meta = list_first_entry_or_null(&ctx->buffer_meta_list,
 					struct coda_buffer_meta, list);
 
 	if (meta && ctx->codec->src_fourcc == V4L2_PIX_FMT_JPEG) {
 
 		/* If this is the last buffer in the bitstream, add padding */
-		if (meta->end == ctx->bitstream_fifo.kfifo.in) {
+		if (meta->end == (ctx->bitstream_fifo.kfifo.in &
+				  ctx->bitstream_fifo.kfifo.mask)) {
 			static unsigned char buf[512];
 			unsigned int pad;
 
@@ -1999,15 +1993,12 @@ static int coda_prepare_decode(struct coda_ctx *ctx)
 			kfifo_in(&ctx->bitstream_fifo, buf, pad);
 		}
 	}
-	spin_unlock(&ctx->buffer_meta_lock);
+	spin_unlock_irqrestore(&ctx->buffer_meta_lock, flags);
 
 	coda_kfifo_sync_to_device_full(ctx);
 
 	/* Clear decode success flag */
 	coda_write(dev, 0, CODA_RET_DEC_PIC_SUCCESS);
-
-	/* Clear error return value */
-	coda_write(dev, 0, CODA_RET_DEC_PIC_ERR_MB);
 
 	trace_coda_dec_pic_run(ctx, meta);
 
@@ -2023,6 +2014,8 @@ static void coda_finish_decode(struct coda_ctx *ctx)
 	struct coda_q_data *q_data_dst;
 	struct vb2_v4l2_buffer *dst_buf;
 	struct coda_buffer_meta *meta;
+	unsigned long payload;
+	unsigned long flags;
 	int width, height;
 	int decoded_idx;
 	int display_idx;
@@ -2107,7 +2100,8 @@ static void coda_finish_decode(struct coda_ctx *ctx)
 		val = coda_read(dev, CODA_RET_DEC_PIC_OPTION);
 		if (val == 0) {
 			/* not enough bitstream data */
-			coda_dbg(1, ctx, "prescan failed: %d\n", val);
+			v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+				 "prescan failed: %d\n", val);
 			ctx->hold = true;
 			return;
 		}
@@ -2153,13 +2147,13 @@ static void coda_finish_decode(struct coda_ctx *ctx)
 	} else {
 		val = coda_read(dev, CODA_RET_DEC_PIC_FRAME_NUM) - 1;
 		val -= ctx->sequence_offset;
-		spin_lock(&ctx->buffer_meta_lock);
+		spin_lock_irqsave(&ctx->buffer_meta_lock, flags);
 		if (!list_empty(&ctx->buffer_meta_list)) {
 			meta = list_first_entry(&ctx->buffer_meta_list,
 					      struct coda_buffer_meta, list);
 			list_del(&meta->list);
 			ctx->num_metas--;
-			spin_unlock(&ctx->buffer_meta_lock);
+			spin_unlock_irqrestore(&ctx->buffer_meta_lock, flags);
 			/*
 			 * Clamp counters to 16 bits for comparison, as the HW
 			 * counter rolls over at this point for h.264. This
@@ -2176,7 +2170,7 @@ static void coda_finish_decode(struct coda_ctx *ctx)
 			ctx->frame_metas[decoded_idx] = *meta;
 			kfree(meta);
 		} else {
-			spin_unlock(&ctx->buffer_meta_lock);
+			spin_unlock_irqrestore(&ctx->buffer_meta_lock, flags);
 			v4l2_err(&dev->v4l2_dev, "empty timestamp list!\n");
 			memset(&ctx->frame_metas[decoded_idx], 0,
 			       sizeof(struct coda_buffer_meta));
@@ -2228,36 +2222,39 @@ static void coda_finish_decode(struct coda_ctx *ctx)
 
 		trace_coda_dec_rot_done(ctx, dst_buf, meta);
 
-		vb2_set_plane_payload(&dst_buf->vb2_buf, 0,
-				      q_data_dst->sizeimage);
+		switch (q_data_dst->fourcc) {
+		case V4L2_PIX_FMT_YUYV:
+			payload = width * height * 2;
+			break;
+		case V4L2_PIX_FMT_YUV420:
+		case V4L2_PIX_FMT_YVU420:
+		case V4L2_PIX_FMT_NV12:
+		default:
+			payload = width * height * 3 / 2;
+			break;
+		case V4L2_PIX_FMT_YUV422P:
+			payload = width * height * 2;
+			break;
+		}
+		vb2_set_plane_payload(&dst_buf->vb2_buf, 0, payload);
 
 		if (ctx->frame_errors[ctx->display_idx] || err_vdoa)
 			coda_m2m_buf_done(ctx, dst_buf, VB2_BUF_STATE_ERROR);
 		else
 			coda_m2m_buf_done(ctx, dst_buf, VB2_BUF_STATE_DONE);
 
-		coda_dbg(1, ctx, "job finished: decoded %c frame (%u/%u)\n",
-			 (dst_buf->flags & V4L2_BUF_FLAG_KEYFRAME) ? 'I' :
-			 ((dst_buf->flags & V4L2_BUF_FLAG_PFRAME) ? 'P' : 'B'),
-			 dst_buf->sequence, ctx->qsequence);
+		v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+			"job finished: decoding frame (%d) (%s)\n",
+			dst_buf->sequence,
+			(dst_buf->flags & V4L2_BUF_FLAG_KEYFRAME) ?
+			"KEYFRAME" : "PFRAME");
 	} else {
-		coda_dbg(1, ctx, "job finished: no frame decoded (%u/%u)\n",
-			 ctx->osequence, ctx->qsequence);
+		v4l2_dbg(1, coda_debug, &dev->v4l2_dev,
+			"job finished: no frame decoded\n");
 	}
 
 	/* The rotator will copy the current display frame next time */
 	ctx->display_idx = display_idx;
-
-	/*
-	 * The current decode run might have brought the bitstream fill level
-	 * below the size where we can start the next decode run. As userspace
-	 * might have filled the output queue completely and might thus be
-	 * blocked, we can't rely on the next qbuf to trigger the bitstream
-	 * refill. Check if we have data to refill the bitstream now.
-	 */
-	mutex_lock(&ctx->bitstream_mutex);
-	coda_fill_bitstream(ctx, NULL);
-	mutex_unlock(&ctx->bitstream_mutex);
 }
 
 static void coda_decode_timeout(struct coda_ctx *ctx)
@@ -2311,11 +2308,13 @@ irqreturn_t coda_irq_handler(int irq, void *data)
 	trace_coda_bit_done(ctx);
 
 	if (ctx->aborting) {
-		coda_dbg(1, ctx, "task has been aborted\n");
+		v4l2_dbg(1, coda_debug, &ctx->dev->v4l2_dev,
+			 "task has been aborted\n");
 	}
 
 	if (coda_isbusy(ctx->dev)) {
-		coda_dbg(1, ctx, "coda is still busy!!!!\n");
+		v4l2_dbg(1, coda_debug, &ctx->dev->v4l2_dev,
+			 "coda is still busy!!!!\n");
 		return IRQ_NONE;
 	}
 

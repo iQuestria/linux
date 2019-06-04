@@ -33,10 +33,7 @@
 #include <linux/module.h>
 #include <linux/configfs.h>
 #include <rdma/ib_verbs.h>
-#include <rdma/rdma_cm.h>
-
 #include "core_priv.h"
-#include "cma_priv.h"
 
 struct cma_device;
 

@@ -11,7 +11,6 @@
 #include <linux/of_address.h>
 #include <linux/of_mdio.h>
 #include <linux/jiffies.h>
-#include <linux/iopoll.h>
 
 #include "xilinx_axienet.h"
 
@@ -21,11 +20,16 @@
 /* Wait till MDIO interface is ready to accept a new transaction.*/
 int axienet_mdio_wait_until_ready(struct axienet_local *lp)
 {
-	u32 val;
-
-	return readx_poll_timeout(axinet_ior_read_mcr, lp,
-				  val, val & XAE_MDIO_MCR_READY_MASK,
-				  1, 20000);
+	unsigned long end = jiffies + 2;
+	while (!(axienet_ior(lp, XAE_MDIO_MCR_OFFSET) &
+		 XAE_MDIO_MCR_READY_MASK)) {
+		if (time_before_eq(end, jiffies)) {
+			WARN_ON(1);
+			return -ETIMEDOUT;
+		}
+		udelay(1);
+	}
+	return 0;
 }
 
 /**

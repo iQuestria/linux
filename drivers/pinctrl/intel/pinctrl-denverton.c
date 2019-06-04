@@ -6,7 +6,7 @@
  * Author: Mika Westerberg <mika.westerberg@linux.intel.com>
  */
 
-#include <linux/mod_devicetable.h>
+#include <linux/acpi.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 
@@ -257,16 +257,21 @@ static const struct intel_pinctrl_soc_data dnv_soc_data = {
 	.ncommunities = ARRAY_SIZE(dnv_communities),
 };
 
+static int dnv_pinctrl_probe(struct platform_device *pdev)
+{
+	return intel_pinctrl_probe(pdev, &dnv_soc_data);
+}
+
 static INTEL_PINCTRL_PM_OPS(dnv_pinctrl_pm_ops);
 
 static const struct acpi_device_id dnv_pinctrl_acpi_match[] = {
-	{ "INTC3000", (kernel_ulong_t)&dnv_soc_data },
+	{ "INTC3000" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, dnv_pinctrl_acpi_match);
 
 static struct platform_driver dnv_pinctrl_driver = {
-	.probe = intel_pinctrl_probe_by_hid,
+	.probe = dnv_pinctrl_probe,
 	.driver = {
 		.name = "denverton-pinctrl",
 		.acpi_match_table = dnv_pinctrl_acpi_match,

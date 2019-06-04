@@ -4,8 +4,6 @@
 
 .. highlight:: none
 
-.. _devtools_coccinelle:
-
 Coccinelle
 ==========
 

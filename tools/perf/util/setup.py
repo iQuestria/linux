@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 from os import getenv
 from subprocess import Popen, PIPE
 from re import sub
@@ -15,8 +17,6 @@ if cc == "clang":
             vars[var] = sub("-mcet", "", vars[var])
         if not clang_has_option("-fcf-protection"):
             vars[var] = sub("-fcf-protection", "", vars[var])
-        if not clang_has_option("-fstack-clash-protection"):
-            vars[var] = sub("-fstack-clash-protection", "", vars[var])
 
 from distutils.core import setup, Extension
 
@@ -53,14 +53,9 @@ ext_sources = [f.strip() for f in open('util/python-ext-sources')
 # use full paths with source files
 ext_sources = list(map(lambda x: '%s/%s' % (src_perf, x) , ext_sources))
 
-extra_libraries = []
-if '-DHAVE_LIBNUMA_SUPPORT' in cflags:
-    extra_libraries = [ 'numa' ]
-
 perf = Extension('perf',
 		  sources = ext_sources,
 		  include_dirs = ['util/include'],
-		  libraries = extra_libraries,
 		  extra_compile_args = cflags,
 		  extra_objects = [libtraceevent, libapikfs],
                  )

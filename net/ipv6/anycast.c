@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	Anycast support for IPv6
  *	Linux INET6 implementation
@@ -7,6 +6,11 @@
  *	David L Stevens (dlstevens@us.ibm.com)
  *
  *	based heavily on net/ipv6/mcast.c
+ *
+ *	This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/capability.h>
@@ -429,6 +433,7 @@ static bool ipv6_chk_acast_dev(struct net_device *dev, const struct in6_addr *ad
 bool ipv6_chk_acast_addr(struct net *net, struct net_device *dev,
 			 const struct in6_addr *addr)
 {
+	unsigned int hash = inet6_acaddr_hash(net, addr);
 	struct net_device *nh_dev;
 	struct ifacaddr6 *aca;
 	bool found = false;
@@ -436,9 +441,7 @@ bool ipv6_chk_acast_addr(struct net *net, struct net_device *dev,
 	rcu_read_lock();
 	if (dev)
 		found = ipv6_chk_acast_dev(dev, addr);
-	else {
-		unsigned int hash = inet6_acaddr_hash(net, addr);
-
+	else
 		hlist_for_each_entry_rcu(aca, &inet6_acaddr_lst[hash],
 					 aca_addr_lst) {
 			nh_dev = fib6_info_nh_dev(aca->aca_rt);
@@ -449,7 +452,6 @@ bool ipv6_chk_acast_addr(struct net *net, struct net_device *dev,
 				break;
 			}
 		}
-	}
 	rcu_read_unlock();
 	return found;
 }

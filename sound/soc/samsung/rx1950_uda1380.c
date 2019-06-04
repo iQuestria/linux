@@ -1,15 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0+
-//
-// rx1950.c - ALSA SoC Audio Layer
-//
-// Copyright (c) 2010 Vasily Khoruzhick <anarsoul@gmail.com>
-//
-// Based on smdk2440.c and magician.c
-//
-// Authors: Graeme Gregory graeme.gregory@wolfsonmicro.com
-//          Philipp Zabel <philipp.zabel@gmail.com>
-//          Denis Grigoriev <dgreenday@gmail.com>
-//          Vasily Khoruzhick <anarsoul@gmail.com>
+/*
+ * rx1950.c  --  ALSA Soc Audio Layer
+ *
+ * Copyright (c) 2010 Vasily Khoruzhick <anarsoul@gmail.com>
+ *
+ * Based on smdk2440.c and magician.c
+ *
+ * Authors: Graeme Gregory graeme.gregory@wolfsonmicro.com
+ *          Philipp Zabel <philipp.zabel@gmail.com>
+ *          Denis Grigoriev <dgreenday@gmail.com>
+ *          Vasily Khoruzhick <anarsoul@gmail.com>
+ *
+ *  This program is free software; you can redistribute  it and/or modify it
+ *  under  the terms of  the GNU General  Public License as published by the
+ *  Free Software Foundation;  either version 2 of the  License, or (at your
+ *  option) any later version.
+ *
+ */
 
 #include <linux/types.h>
 #include <linux/gpio.h>

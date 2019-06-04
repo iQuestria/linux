@@ -977,6 +977,7 @@ krb5_rc4_setup_seq_key(struct krb5_ctx *kctx,
 	}
 
 	desc->tfm = hmac;
+	desc->flags = 0;
 
 	/* Compute intermediate Kseq from session key */
 	err = crypto_shash_setkey(hmac, kctx->Ksess, kctx->gk5e->keylength);
@@ -1044,6 +1045,7 @@ krb5_rc4_setup_enc_key(struct krb5_ctx *kctx,
 	}
 
 	desc->tfm = hmac;
+	desc->flags = 0;
 
 	/* Compute intermediate Kcrypt from session key */
 	for (i = 0; i < kctx->gk5e->keylength; i++)

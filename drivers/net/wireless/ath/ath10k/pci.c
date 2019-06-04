@@ -1,7 +1,18 @@
-// SPDX-License-Identifier: ISC
 /*
  * Copyright (c) 2005-2011 Atheros Communications Inc.
  * Copyright (c) 2011-2017 Qualcomm Atheros, Inc.
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #include <linux/pci.h>
@@ -902,6 +913,7 @@ static int ath10k_pci_diag_read_mem(struct ath10k *ar, u32 address, void *data,
 				    int nbytes)
 {
 	struct ath10k_pci *ar_pci = ath10k_pci_priv(ar);
+	struct ath10k_ce *ce = ath10k_ce_priv(ar);
 	int ret = 0;
 	u32 *buf;
 	unsigned int completed_nbytes, alloc_nbytes, remaining_bytes;
@@ -912,7 +924,8 @@ static int ath10k_pci_diag_read_mem(struct ath10k *ar, u32 address, void *data,
 	void *data_buf = NULL;
 	int i;
 
-	mutex_lock(&ar_pci->ce_diag_mutex);
+	spin_lock_bh(&ce->ce_lock);
+
 	ce_diag = ar_pci->ce_diag;
 
 	/*
@@ -923,7 +936,8 @@ static int ath10k_pci_diag_read_mem(struct ath10k *ar, u32 address, void *data,
 	 */
 	alloc_nbytes = min_t(unsigned int, nbytes, DIAG_TRANSFER_LIMIT);
 
-	data_buf = (unsigned char *)dma_alloc_coherent(ar->dev, alloc_nbytes,
+	data_buf = (unsigned char *)dma_zalloc_coherent(ar->dev,
+						       alloc_nbytes,
 						       &ce_data_base,
 						       GFP_ATOMIC);
 
@@ -947,17 +961,19 @@ static int ath10k_pci_diag_read_mem(struct ath10k *ar, u32 address, void *data,
 		nbytes = min_t(unsigned int, remaining_bytes,
 			       DIAG_TRANSFER_LIMIT);
 
-		ret = ath10k_ce_rx_post_buf(ce_diag, &ce_data, ce_data);
+		ret = ce_diag->ops->ce_rx_post_buf(ce_diag, &ce_data, ce_data);
 		if (ret != 0)
 			goto done;
 
 		/* Request CE to send from Target(!) address to Host buffer */
-		ret = ath10k_ce_send(ce_diag, NULL, (u32)address, nbytes, 0, 0);
+		ret = ath10k_ce_send_nolock(ce_diag, NULL, (u32)address, nbytes, 0,
+					    0);
 		if (ret)
 			goto done;
 
 		i = 0;
-		while (ath10k_ce_completed_send_next(ce_diag, NULL) != 0) {
+		while (ath10k_ce_completed_send_next_nolock(ce_diag,
+							    NULL) != 0) {
 			udelay(DIAG_ACCESS_CE_WAIT_US);
 			i += DIAG_ACCESS_CE_WAIT_US;
 
@@ -968,8 +984,10 @@ static int ath10k_pci_diag_read_mem(struct ath10k *ar, u32 address, void *data,
 		}
 
 		i = 0;
-		while (ath10k_ce_completed_recv_next(ce_diag, (void **)&buf,
-						     &completed_nbytes) != 0) {
+		while (ath10k_ce_completed_recv_next_nolock(ce_diag,
+							    (void **)&buf,
+							    &completed_nbytes)
+								!= 0) {
 			udelay(DIAG_ACCESS_CE_WAIT_US);
 			i += DIAG_ACCESS_CE_WAIT_US;
 
@@ -1002,7 +1020,7 @@ done:
 		dma_free_coherent(ar->dev, alloc_nbytes, data_buf,
 				  ce_data_base);
 
-	mutex_unlock(&ar_pci->ce_diag_mutex);
+	spin_unlock_bh(&ce->ce_lock);
 
 	return ret;
 }
@@ -1050,6 +1068,7 @@ int ath10k_pci_diag_write_mem(struct ath10k *ar, u32 address,
 			      const void *data, int nbytes)
 {
 	struct ath10k_pci *ar_pci = ath10k_pci_priv(ar);
+	struct ath10k_ce *ce = ath10k_ce_priv(ar);
 	int ret = 0;
 	u32 *buf;
 	unsigned int completed_nbytes, alloc_nbytes, remaining_bytes;
@@ -1058,7 +1077,8 @@ int ath10k_pci_diag_write_mem(struct ath10k *ar, u32 address,
 	dma_addr_t ce_data_base = 0;
 	int i;
 
-	mutex_lock(&ar_pci->ce_diag_mutex);
+	spin_lock_bh(&ce->ce_lock);
+
 	ce_diag = ar_pci->ce_diag;
 
 	/*
@@ -1099,7 +1119,7 @@ int ath10k_pci_diag_write_mem(struct ath10k *ar, u32 address,
 		memcpy(data_buf, data, nbytes);
 
 		/* Set up to receive directly into Target(!) address */
-		ret = ath10k_ce_rx_post_buf(ce_diag, &address, address);
+		ret = ce_diag->ops->ce_rx_post_buf(ce_diag, &address, address);
 		if (ret != 0)
 			goto done;
 
@@ -1107,12 +1127,14 @@ int ath10k_pci_diag_write_mem(struct ath10k *ar, u32 address,
 		 * Request CE to send caller-supplied data that
 		 * was copied to bounce buffer to Target(!) address.
 		 */
-		ret = ath10k_ce_send(ce_diag, NULL, ce_data_base, nbytes, 0, 0);
+		ret = ath10k_ce_send_nolock(ce_diag, NULL, ce_data_base,
+					    nbytes, 0, 0);
 		if (ret != 0)
 			goto done;
 
 		i = 0;
-		while (ath10k_ce_completed_send_next(ce_diag, NULL) != 0) {
+		while (ath10k_ce_completed_send_next_nolock(ce_diag,
+							    NULL) != 0) {
 			udelay(DIAG_ACCESS_CE_WAIT_US);
 			i += DIAG_ACCESS_CE_WAIT_US;
 
@@ -1123,8 +1145,10 @@ int ath10k_pci_diag_write_mem(struct ath10k *ar, u32 address,
 		}
 
 		i = 0;
-		while (ath10k_ce_completed_recv_next(ce_diag, (void **)&buf,
-						     &completed_nbytes) != 0) {
+		while (ath10k_ce_completed_recv_next_nolock(ce_diag,
+							    (void **)&buf,
+							    &completed_nbytes)
+								!= 0) {
 			udelay(DIAG_ACCESS_CE_WAIT_US);
 			i += DIAG_ACCESS_CE_WAIT_US;
 
@@ -1159,7 +1183,7 @@ done:
 		ath10k_warn(ar, "failed to write diag value at 0x%x: %d\n",
 			    address, ret);
 
-	mutex_unlock(&ar_pci->ce_diag_mutex);
+	spin_unlock_bh(&ce->ce_lock);
 
 	return ret;
 }
@@ -1441,7 +1465,7 @@ static void ath10k_pci_dump_registers(struct ath10k *ar,
 	__le32 reg_dump_values[REG_DUMP_COUNT_QCA988X] = {};
 	int i, ret;
 
-	lockdep_assert_held(&ar->dump_mutex);
+	lockdep_assert_held(&ar->data_lock);
 
 	ret = ath10k_pci_diag_read_hi(ar, &reg_dump_values[0],
 				      hi_failure_state,
@@ -1656,7 +1680,7 @@ static void ath10k_pci_dump_memory(struct ath10k *ar,
 	int ret, i;
 	u8 *buf;
 
-	lockdep_assert_held(&ar->dump_mutex);
+	lockdep_assert_held(&ar->data_lock);
 
 	if (!crash_data)
 		return;
@@ -1734,19 +1758,14 @@ static void ath10k_pci_dump_memory(struct ath10k *ar,
 	}
 }
 
-static void ath10k_pci_fw_dump_work(struct work_struct *work)
+static void ath10k_pci_fw_crashed_dump(struct ath10k *ar)
 {
-	struct ath10k_pci *ar_pci = container_of(work, struct ath10k_pci,
-						 dump_work);
 	struct ath10k_fw_crash_data *crash_data;
-	struct ath10k *ar = ar_pci->ar;
 	char guid[UUID_STRING_LEN + 1];
 
-	mutex_lock(&ar->dump_mutex);
-
 	spin_lock_bh(&ar->data_lock);
+
 	ar->stats.fw_crash_counter++;
-	spin_unlock_bh(&ar->data_lock);
 
 	crash_data = ath10k_coredump_new(ar);
 
@@ -1761,16 +1780,9 @@ static void ath10k_pci_fw_dump_work(struct work_struct *work)
 	ath10k_ce_dump_registers(ar, crash_data);
 	ath10k_pci_dump_memory(ar, crash_data);
 
-	mutex_unlock(&ar->dump_mutex);
+	spin_unlock_bh(&ar->data_lock);
 
 	queue_work(ar->workqueue, &ar->restart_work);
-}
-
-static void ath10k_pci_fw_crashed_dump(struct ath10k *ar)
-{
-	struct ath10k_pci *ar_pci = ath10k_pci_priv(ar);
-
-	queue_work(ar->workqueue, &ar_pci->dump_work);
 }
 
 void ath10k_pci_hif_send_complete_check(struct ath10k *ar, u8 pipe,
@@ -2272,7 +2284,7 @@ static int ath10k_pci_get_num_banks(struct ath10k *ar)
 		return 1;
 	case QCA6164_2_1_DEVICE_ID:
 	case QCA6174_2_1_DEVICE_ID:
-		switch (MS(ar->bus_param.chip_id, SOC_CHIP_ID_REV)) {
+		switch (MS(ar->chip_id, SOC_CHIP_ID_REV)) {
 		case QCA6174_HW_1_0_CHIP_ID_REV:
 		case QCA6174_HW_1_1_CHIP_ID_REV:
 		case QCA6174_HW_2_1_CHIP_ID_REV:
@@ -2795,8 +2807,7 @@ static int ath10k_pci_chip_reset(struct ath10k *ar)
 	return ar_pci->pci_hard_reset(ar);
 }
 
-static int ath10k_pci_hif_power_up(struct ath10k *ar,
-				   enum ath10k_firmware_mode fw_mode)
+static int ath10k_pci_hif_power_up(struct ath10k *ar)
 {
 	struct ath10k_pci *ar_pci = ath10k_pci_priv(ar);
 	int ret;
@@ -3452,9 +3463,6 @@ int ath10k_pci_setup_resource(struct ath10k *ar)
 
 	spin_lock_init(&ce->ce_lock);
 	spin_lock_init(&ar_pci->ps_lock);
-	mutex_init(&ar_pci->ce_diag_mutex);
-
-	INIT_WORK(&ar_pci->dump_work, ath10k_pci_fw_dump_work);
 
 	timer_setup(&ar_pci->rx_post_retry, ath10k_pci_rx_replenish_retry, 0);
 
@@ -3546,7 +3554,7 @@ static int ath10k_pci_probe(struct pci_dev *pdev,
 	case QCA9377_1_0_DEVICE_ID:
 		hw_rev = ATH10K_HW_QCA9377;
 		pci_ps = true;
-		pci_soft_reset = ath10k_pci_warm_reset;
+		pci_soft_reset = NULL;
 		pci_hard_reset = ath10k_pci_qca6174_chip_reset;
 		targ_cpu_to_ce_addr = ath10k_pci_qca6174_targ_cpu_to_ce_addr;
 		break;
@@ -3629,7 +3637,6 @@ static int ath10k_pci_probe(struct pci_dev *pdev,
 	}
 
 	bus_params.dev_type = ATH10K_DEV_TYPE_LL;
-	bus_params.link_can_suspend = true;
 	bus_params.chip_id = ath10k_pci_soc_read32(ar, SOC_CHIP_ID_ADDRESS);
 	if (bus_params.chip_id == 0xffffffff) {
 		ath10k_err(ar, "failed to get chip id\n");

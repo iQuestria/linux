@@ -104,6 +104,8 @@ struct ast_private {
 	int fb_mtrr;
 
 	struct {
+		struct drm_global_reference mem_global_ref;
+		struct ttm_bo_global_ref bo_global_ref;
 		struct ttm_bo_device bdev;
 	} ttm;
 
@@ -259,7 +261,7 @@ struct ast_framebuffer {
 };
 
 struct ast_fbdev {
-	struct drm_fb_helper helper; /* must be first */
+	struct drm_fb_helper helper;
 	struct ast_framebuffer afb;
 	void *sysram;
 	int size;
@@ -352,6 +354,8 @@ extern int ast_dumb_mmap_offset(struct drm_file *file,
 				struct drm_device *dev,
 				uint32_t handle,
 				uint64_t *offset);
+
+#define DRM_FILE_PAGE_OFFSET (0x100000000ULL >> PAGE_SHIFT)
 
 int ast_mm_init(struct ast_private *ast);
 void ast_mm_fini(struct ast_private *ast);

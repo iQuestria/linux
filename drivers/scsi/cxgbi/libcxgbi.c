@@ -282,6 +282,7 @@ struct cxgbi_device *cxgbi_device_find_by_netdev_rcu(struct net_device *ndev,
 }
 EXPORT_SYMBOL_GPL(cxgbi_device_find_by_netdev_rcu);
 
+#if IS_ENABLED(CONFIG_IPV6)
 static struct cxgbi_device *cxgbi_device_find_by_mac(struct net_device *ndev,
 						     int *port)
 {
@@ -314,6 +315,7 @@ static struct cxgbi_device *cxgbi_device_find_by_mac(struct net_device *ndev,
 		  ndev, ndev->name);
 	return NULL;
 }
+#endif
 
 void cxgbi_hbas_remove(struct cxgbi_device *cdev)
 {
@@ -571,7 +573,6 @@ static struct cxgbi_sock *cxgbi_sock_create(struct cxgbi_device *cdev)
 	skb_queue_head_init(&csk->receive_queue);
 	skb_queue_head_init(&csk->write_queue);
 	timer_setup(&csk->retry_timer, NULL, 0);
-	init_completion(&csk->cmpl);
 	rwlock_init(&csk->callback_lock);
 	csk->cdev = cdev;
 	csk->flags = 0;
@@ -639,10 +640,6 @@ cxgbi_check_route(struct sockaddr *dst_addr, int ifindex)
 
 	if (ndev->flags & IFF_LOOPBACK) {
 		ndev = ip_dev_find(&init_net, daddr->sin_addr.s_addr);
-		if (!ndev) {
-			err = -ENETUNREACH;
-			goto rel_neigh;
-		}
 		mtu = ndev->mtu;
 		pr_info("rt dev %s, loopback -> %s, mtu %u.\n",
 			n->dev->name, ndev->name, mtu);
@@ -655,8 +652,6 @@ cxgbi_check_route(struct sockaddr *dst_addr, int ifindex)
 	}
 
 	cdev = cxgbi_device_find_by_netdev(ndev, &port);
-	if (!cdev)
-		cdev = cxgbi_device_find_by_mac(ndev, &port);
 	if (!cdev) {
 		pr_info("dst %pI4, %s, NOT cxgbi device.\n",
 			&daddr->sin_addr.s_addr, ndev->name);
@@ -1216,7 +1211,7 @@ scmd_get_params(struct scsi_cmnd *sc, struct scatterlist **sgl,
 		unsigned int *sgcnt, unsigned int *dlen,
 		unsigned int prot)
 {
-	struct scsi_data_buffer *sdb = prot ? scsi_prot(sc) : &sc->sdb;
+	struct scsi_data_buffer *sdb = prot ? scsi_prot(sc) : scsi_out(sc);
 
 	*sgl = sdb->table.sgl;
 	*sgcnt = sdb->table.nents;
@@ -1432,7 +1427,8 @@ static void task_release_itt(struct iscsi_task *task, itt_t hdr_itt)
 	log_debug(1 << CXGBI_DBG_DDP,
 		  "cdev 0x%p, task 0x%p, release tag 0x%x.\n",
 		  cdev, task, tag);
-	if (sc && sc->sc_data_direction == DMA_FROM_DEVICE &&
+	if (sc &&
+	    (scsi_bidi_cmnd(sc) || sc->sc_data_direction == DMA_FROM_DEVICE) &&
 	    cxgbi_ppm_is_ddp_tag(ppm, tag)) {
 		struct cxgbi_task_data *tdata = iscsi_task_cxgbi_data(task);
 		struct cxgbi_task_tag_info *ttinfo = &tdata->ttinfo;
@@ -1464,7 +1460,9 @@ static int task_reserve_itt(struct iscsi_task *task, itt_t *hdr_itt)
 	u32 tag = 0;
 	int err = -EINVAL;
 
-	if (sc && sc->sc_data_direction == DMA_FROM_DEVICE) {
+	if (sc &&
+	    (scsi_bidi_cmnd(sc) || sc->sc_data_direction == DMA_FROM_DEVICE)
+	) {
 		struct cxgbi_task_data *tdata = iscsi_task_cxgbi_data(task);
 		struct cxgbi_task_tag_info *ttinfo = &tdata->ttinfo;
 
@@ -1898,7 +1896,7 @@ int cxgbi_conn_alloc_pdu(struct iscsi_task *task, u8 opcode)
 	if (SKB_MAX_HEAD(cdev->skb_tx_rsvd) > (512 * MAX_SKB_FRAGS) &&
 	    (opcode == ISCSI_OP_SCSI_DATA_OUT ||
 	     (opcode == ISCSI_OP_SCSI_CMD &&
-	      sc->sc_data_direction == DMA_TO_DEVICE)))
+	      (scsi_bidi_cmnd(sc) || sc->sc_data_direction == DMA_TO_DEVICE))))
 		/* data could goes into skb head */
 		headroom += min_t(unsigned int,
 				SKB_MAX_HEAD(cdev->skb_tx_rsvd),
@@ -1973,7 +1971,7 @@ int cxgbi_conn_init_pdu(struct iscsi_task *task, unsigned int offset,
 		return 0;
 
 	if (task->sc) {
-		struct scsi_data_buffer *sdb = &task->sc->sdb;
+		struct scsi_data_buffer *sdb = scsi_out(task->sc);
 		struct scatterlist *sg = NULL;
 		int err;
 
@@ -2253,14 +2251,14 @@ int cxgbi_set_conn_param(struct iscsi_cls_conn *cls_conn,
 		if (!err && conn->hdrdgst_en)
 			err = csk->cdev->csk_ddp_setup_digest(csk, csk->tid,
 							conn->hdrdgst_en,
-							conn->datadgst_en);
+							conn->datadgst_en, 0);
 		break;
 	case ISCSI_PARAM_DATADGST_EN:
 		err = iscsi_set_param(cls_conn, param, buf, buflen);
 		if (!err && conn->datadgst_en)
 			err = csk->cdev->csk_ddp_setup_digest(csk, csk->tid,
 							conn->hdrdgst_en,
-							conn->datadgst_en);
+							conn->datadgst_en, 0);
 		break;
 	case ISCSI_PARAM_MAX_R2T:
 		return iscsi_tcp_set_max_r2t(conn, buf);
@@ -2314,6 +2312,7 @@ int cxgbi_get_ep_param(struct iscsi_endpoint *ep, enum iscsi_param param,
 {
 	struct cxgbi_endpoint *cep = ep->dd_data;
 	struct cxgbi_sock *csk;
+	int len;
 
 	log_debug(1 << CXGBI_DBG_ISCSI,
 		"cls_conn 0x%p, param %d.\n", ep, param);
@@ -2331,9 +2330,9 @@ int cxgbi_get_ep_param(struct iscsi_endpoint *ep, enum iscsi_param param,
 		return iscsi_conn_get_addr_param((struct sockaddr_storage *)
 						 &csk->daddr, param, buf);
 	default:
-		break;
+		return -ENOSYS;
 	}
-	return -ENOSYS;
+	return len;
 }
 EXPORT_SYMBOL_GPL(cxgbi_get_ep_param);
 
@@ -2385,7 +2384,7 @@ int cxgbi_bind_conn(struct iscsi_cls_session *cls_session,
 
 	ppm = csk->cdev->cdev2ppm(csk->cdev);
 	err = csk->cdev->csk_ddp_setup_pgidx(csk, csk->tid,
-					     ppm->tformat.pgsz_idx_dflt);
+					     ppm->tformat.pgsz_idx_dflt, 0);
 	if (err < 0)
 		return err;
 
@@ -2566,9 +2565,13 @@ struct iscsi_endpoint *cxgbi_ep_connect(struct Scsi_Host *shost,
 			pr_info("shost 0x%p, priv NULL.\n", shost);
 			goto err_out;
 		}
+
+		rtnl_lock();
+		if (!vlan_uses_dev(hba->ndev))
+			ifindex = hba->ndev->ifindex;
+		rtnl_unlock();
 	}
 
-check_route:
 	if (dst_addr->sa_family == AF_INET) {
 		csk = cxgbi_check_route(dst_addr, ifindex);
 #if IS_ENABLED(CONFIG_IPV6)
@@ -2589,13 +2592,6 @@ check_route:
 	if (!hba)
 		hba = csk->cdev->hbas[csk->port_id];
 	else if (hba != csk->cdev->hbas[csk->port_id]) {
-		if (ifindex != hba->ndev->ifindex) {
-			cxgbi_sock_put(csk);
-			cxgbi_sock_closed(csk);
-			ifindex = hba->ndev->ifindex;
-			goto check_route;
-		}
-
 		pr_info("Could not connect through requested host %u"
 			"hba 0x%p != 0x%p (%u).\n",
 			shost->host_no, hba,

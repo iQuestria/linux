@@ -79,9 +79,6 @@
 /* Nuvoton UART */
 #define PORT_NPCM	40
 
-/* NVIDIA Tegra Combined UART */
-#define PORT_TEGRA_TCU	41
-
 /* Intel EG20 */
 #define PORT_PCH_8LINE	44
 #define PORT_PCH_2LINE	45
@@ -283,14 +280,5 @@
 
 /* MediaTek BTIF */
 #define PORT_MTK_BTIF	117
-
-/* RDA UART */
-#define PORT_RDA	118
-
-/* Socionext Milbeaut UART */
-#define PORT_MLB_USIO	119
-
-/* SiFive UART */
-#define PORT_SIFIVE_V0	120
 
 #endif /* _UAPILINUX_SERIAL_CORE_H */

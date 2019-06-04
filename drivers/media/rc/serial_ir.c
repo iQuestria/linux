@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * serial_ir.c
  *
@@ -11,6 +10,15 @@
  * Copyright (C) 1999 Christoph Bartelmus <lirc@bartelmus.de>
  * Copyright (C) 2007 Andrei Tanas <andrei@tanas.ca> (suspend/resume support)
  * Copyright (C) 2016 Sean Young <sean@mess.org> (port to rc-core)
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -765,6 +773,8 @@ static void serial_ir_exit(void)
 
 static int __init serial_ir_init_module(void)
 {
+	int result;
+
 	switch (type) {
 	case IR_HOMEBREW:
 	case IR_IRDEO:
@@ -792,7 +802,12 @@ static int __init serial_ir_init_module(void)
 	if (sense != -1)
 		sense = !!sense;
 
-	return serial_ir_init();
+	result = serial_ir_init();
+	if (!result)
+		return 0;
+
+	serial_ir_exit();
+	return result;
 }
 
 static void __exit serial_ir_exit_module(void)

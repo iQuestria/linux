@@ -1,8 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * net/sched/act_gact.c		Generic actions
  *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
+ *
  * copyright 	Jamal Hadi Salim (2002-4)
+ *
  */
 
 #include <linux/types.h>
@@ -15,7 +20,6 @@
 #include <linux/init.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
-#include <net/pkt_cls.h>
 #include <linux/tc_act/tc_gact.h>
 #include <net/tc_act/tc_gact.h>
 
@@ -53,11 +57,10 @@ static const struct nla_policy gact_policy[TCA_GACT_MAX + 1] = {
 static int tcf_gact_init(struct net *net, struct nlattr *nla,
 			 struct nlattr *est, struct tc_action **a,
 			 int ovr, int bind, bool rtnl_held,
-			 struct tcf_proto *tp, struct netlink_ext_ack *extack)
+			 struct netlink_ext_ack *extack)
 {
 	struct tc_action_net *tn = net_generic(net, gact_net_id);
 	struct nlattr *tb[TCA_GACT_MAX + 1];
-	struct tcf_chain *goto_ch = NULL;
 	struct tc_gact *parm;
 	struct tcf_gact *gact;
 	int ret = 0;
@@ -69,8 +72,7 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 	if (nla == NULL)
 		return -EINVAL;
 
-	err = nla_parse_nested_deprecated(tb, TCA_GACT_MAX, nla, gact_policy,
-					  NULL);
+	err = nla_parse_nested(tb, TCA_GACT_MAX, nla, gact_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -114,13 +116,10 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 		return err;
 	}
 
-	err = tcf_action_check_ctrlact(parm->action, tp, &goto_ch, extack);
-	if (err < 0)
-		goto release_idr;
 	gact = to_gact(*a);
 
 	spin_lock_bh(&gact->tcf_lock);
-	goto_ch = tcf_action_set_ctrlact(*a, parm->action, goto_ch);
+	gact->tcf_action = parm->action;
 #ifdef CONFIG_GACT_PROB
 	if (p_parm) {
 		gact->tcfg_paction = p_parm->paction;
@@ -134,15 +133,9 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 #endif
 	spin_unlock_bh(&gact->tcf_lock);
 
-	if (goto_ch)
-		tcf_chain_put_by_act(goto_ch);
-
 	if (ret == ACT_P_CREATED)
 		tcf_idr_insert(tn, *a);
 	return ret;
-release_idr:
-	tcf_idr_release(*a, bind);
-	return err;
 }
 
 static int tcf_gact_act(struct sk_buff *skb, const struct tc_action *a,
@@ -260,7 +253,7 @@ static size_t tcf_gact_get_fill_size(const struct tc_action *act)
 
 static struct tc_action_ops act_gact_ops = {
 	.kind		=	"gact",
-	.id		=	TCA_ID_GACT,
+	.type		=	TCA_ACT_GACT,
 	.owner		=	THIS_MODULE,
 	.act		=	tcf_gact_act,
 	.stats_update	=	tcf_gact_stats_update,

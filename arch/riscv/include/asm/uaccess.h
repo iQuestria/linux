@@ -23,7 +23,6 @@
 #include <linux/compiler.h>
 #include <linux/thread_info.h>
 #include <asm/byteorder.h>
-#include <asm/extable.h>
 #include <asm/asm.h>
 
 #define __enable_user_access()							\
@@ -39,11 +38,10 @@
  * For historical reasons, these macros are grossly misnamed.
  */
 
-#define MAKE_MM_SEG(s)	((mm_segment_t) { (s) })
+#define KERNEL_DS	(~0UL)
+#define USER_DS		(TASK_SIZE)
 
-#define KERNEL_DS	MAKE_MM_SEG(~0UL)
-#define USER_DS		MAKE_MM_SEG(TASK_SIZE)
-
+#define get_ds()	(KERNEL_DS)
 #define get_fs()	(current_thread_info()->addr_limit)
 
 static inline void set_fs(mm_segment_t fs)
@@ -51,13 +49,19 @@ static inline void set_fs(mm_segment_t fs)
 	current_thread_info()->addr_limit = fs;
 }
 
-#define segment_eq(a, b) ((a).seg == (b).seg)
+#define segment_eq(a, b) ((a) == (b))
 
-#define user_addr_max()	(get_fs().seg)
+#define user_addr_max()	(get_fs())
 
+
+#define VERIFY_READ	0
+#define VERIFY_WRITE	1
 
 /**
  * access_ok: - Checks if a user space pointer is valid
+ * @type: Type of access: %VERIFY_READ or %VERIFY_WRITE.  Note that
+ *        %VERIFY_WRITE is a superset of %VERIFY_READ - if it is safe
+ *        to write to a block, it is always safe to read from it.
  * @addr: User space pointer to start of block to check
  * @size: Size of block to check
  *
@@ -72,7 +76,7 @@ static inline void set_fs(mm_segment_t fs)
  * checks that the pointer is in the user space range - after calling
  * this function, memory access functions may still return -EFAULT.
  */
-#define access_ok(addr, size) ({					\
+#define access_ok(type, addr, size) ({					\
 	__chk_user_ptr(addr);						\
 	likely(__access_ok((unsigned long __force)(addr), (size)));	\
 })
@@ -85,7 +89,7 @@ static inline int __access_ok(unsigned long addr, unsigned long size)
 {
 	const mm_segment_t fs = get_fs();
 
-	return size <= fs.seg && addr <= fs.seg - size;
+	return (size <= fs) && (addr <= (fs - size));
 }
 
 /*
@@ -101,8 +105,21 @@ static inline int __access_ok(unsigned long addr, unsigned long size)
  * on our cache or tlb entries.
  */
 
-#define __LSW	0
+struct exception_table_entry {
+	unsigned long insn, fixup;
+};
+
+extern int fixup_exception(struct pt_regs *state);
+
+#if defined(__LITTLE_ENDIAN)
 #define __MSW	1
+#define __LSW	0
+#elif defined(__BIG_ENDIAN)
+#define __MSW	0
+#define	__LSW	1
+#else
+#error "Unknown endianness"
+#endif
 
 /*
  * The "__xxx" versions of the user access functions do not verify the address
@@ -241,7 +258,7 @@ do {								\
 ({								\
 	const __typeof__(*(ptr)) __user *__p = (ptr);		\
 	might_fault();						\
-	access_ok(__p, sizeof(*__p)) ?		\
+	access_ok(VERIFY_READ, __p, sizeof(*__p)) ?		\
 		__get_user((x), __p) :				\
 		((x) = 0, -EFAULT);				\
 })
@@ -290,7 +307,7 @@ do {								\
 		"	.balign 4\n"				\
 		"4:\n"						\
 		"	li %0, %6\n"				\
-		"	jump 3b, %1\n"				\
+		"	jump 2b, %1\n"				\
 		"	.previous\n"				\
 		"	.section __ex_table,\"a\"\n"		\
 		"	.balign " RISCV_SZPTR "\n"			\
@@ -369,7 +386,7 @@ do {								\
 ({								\
 	__typeof__(*(ptr)) __user *__p = (ptr);			\
 	might_fault();						\
-	access_ok(__p, sizeof(*__p)) ?		\
+	access_ok(VERIFY_WRITE, __p, sizeof(*__p)) ?		\
 		__put_user((x), __p) :				\
 		-EFAULT;					\
 })
@@ -404,7 +421,7 @@ static inline
 unsigned long __must_check clear_user(void __user *to, unsigned long n)
 {
 	might_fault();
-	return access_ok(to, n) ?
+	return access_ok(VERIFY_WRITE, to, n) ?
 		__clear_user(to, n) : n;
 }
 

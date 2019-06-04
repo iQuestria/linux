@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* n2-drv.c: Niagara-2 RNG driver.
  *
  * Copyright (C) 2008, 2011 David S. Miller <davem@davemloft.net>

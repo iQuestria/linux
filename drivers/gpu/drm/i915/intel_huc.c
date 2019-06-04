@@ -79,7 +79,7 @@ int intel_huc_auth(struct intel_huc *huc)
 	}
 
 	/* Check authentication status, it should be done by now */
-	ret = __intel_wait_for_register(&i915->uncore,
+	ret = __intel_wait_for_register(i915,
 					HUC_STATUS2,
 					HUC_FW_VERIFIED,
 					HUC_FW_VERIFIED,
@@ -108,21 +108,20 @@ fail:
  * This function reads status register to verify if HuC
  * firmware was successfully loaded.
  *
- * Returns: 1 if HuC firmware is loaded and verified,
- * 0 if HuC firmware is not loaded and -ENODEV if HuC
- * is not present on this platform.
+ * Returns positive value if HuC firmware is loaded and verified
+ * and -ENODEV if HuC is not present.
  */
 int intel_huc_check_status(struct intel_huc *huc)
 {
 	struct drm_i915_private *dev_priv = huc_to_i915(huc);
-	intel_wakeref_t wakeref;
-	bool status = false;
+	u32 status;
 
 	if (!HAS_HUC(dev_priv))
 		return -ENODEV;
 
-	with_intel_runtime_pm(dev_priv, wakeref)
-		status = I915_READ(HUC_STATUS2) & HUC_FW_VERIFIED;
+	intel_runtime_pm_get(dev_priv);
+	status = I915_READ(HUC_STATUS2) & HUC_FW_VERIFIED;
+	intel_runtime_pm_put(dev_priv);
 
 	return status;
 }

@@ -518,7 +518,7 @@ process_sq_wqe:
 
 flush_skbs:
 	netdev_txq = netdev_get_tx_queue(netdev, q_id);
-	if ((!netdev_xmit_more()) || (netif_xmit_stopped(netdev_txq)))
+	if ((!skb->xmit_more) || (netif_xmit_stopped(netdev_txq)))
 		hinic_sq_write_db(txq->sq, prod_idx, wqe_size, 0);
 
 	return err;
@@ -655,9 +655,7 @@ static int free_tx_poll(struct napi_struct *napi, int budget)
 
 	if (pkts < budget) {
 		napi_complete(napi);
-		hinic_hwdev_set_msix_state(nic_dev->hwdev,
-					   sq->msix_entry,
-					   HINIC_MSIX_ENABLE);
+		enable_irq(sq->irq);
 		return pkts;
 	}
 
@@ -684,9 +682,7 @@ static irqreturn_t tx_irq(int irq, void *data)
 	nic_dev = netdev_priv(txq->netdev);
 
 	/* Disable the interrupt until napi will be completed */
-	hinic_hwdev_set_msix_state(nic_dev->hwdev,
-				   txq->sq->msix_entry,
-				   HINIC_MSIX_DISABLE);
+	disable_irq_nosync(txq->sq->irq);
 
 	hinic_hwdev_msix_cnt_set(nic_dev->hwdev, txq->sq->msix_entry);
 

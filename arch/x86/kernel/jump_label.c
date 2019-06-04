@@ -16,6 +16,8 @@
 #include <asm/alternative.h>
 #include <asm/text-patching.h>
 
+#ifdef HAVE_JUMP_LABEL
+
 union jump_code_union {
 	char code[JUMP_LABEL_NOP_SIZE];
 	struct {
@@ -37,6 +39,7 @@ static void bug_at(unsigned char *ip, int line)
 
 static void __ref __jump_label_transform(struct jump_entry *entry,
 					 enum jump_label_type type,
+					 void *(*poker)(void *, const void *, size_t),
 					 int init)
 {
 	union jump_code_union jmp;
@@ -48,6 +51,9 @@ static void __ref __jump_label_transform(struct jump_entry *entry,
 	jmp.jump = 0xe9;
 	jmp.offset = jump_entry_target(entry) -
 		     (jump_entry_code(entry) + JUMP_LABEL_NOP_SIZE);
+
+	if (early_boot_irqs_disabled)
+		poker = text_poke_early;
 
 	if (type == JUMP_LABEL_JMP) {
 		if (init) {
@@ -71,19 +77,16 @@ static void __ref __jump_label_transform(struct jump_entry *entry,
 		bug_at((void *)jump_entry_code(entry), line);
 
 	/*
-	 * As long as only a single processor is running and the code is still
-	 * not marked as RO, text_poke_early() can be used; Checking that
-	 * system_state is SYSTEM_BOOTING guarantees it. It will be set to
-	 * SYSTEM_SCHEDULING before other cores are awaken and before the
-	 * code is write-protected.
+	 * Make text_poke_bp() a default fallback poker.
 	 *
 	 * At the time the change is being done, just ignore whether we
 	 * are doing nop -> jump or jump -> nop transition, and assume
 	 * always nop being the 'currently valid' instruction
+	 *
 	 */
-	if (init || system_state == SYSTEM_BOOTING) {
-		text_poke_early((void *)jump_entry_code(entry), code,
-				JUMP_LABEL_NOP_SIZE);
+	if (poker) {
+		(*poker)((void *)jump_entry_code(entry), code,
+			 JUMP_LABEL_NOP_SIZE);
 		return;
 	}
 
@@ -95,7 +98,7 @@ void arch_jump_label_transform(struct jump_entry *entry,
 			       enum jump_label_type type)
 {
 	mutex_lock(&text_mutex);
-	__jump_label_transform(entry, type, 0);
+	__jump_label_transform(entry, type, NULL, 0);
 	mutex_unlock(&text_mutex);
 }
 
@@ -125,5 +128,7 @@ __init_or_module void arch_jump_label_transform_static(struct jump_entry *entry,
 			jlstate = JL_STATE_NO_UPDATE;
 	}
 	if (jlstate == JL_STATE_UPDATE)
-		__jump_label_transform(entry, type, 1);
+		__jump_label_transform(entry, type, text_poke_early, 1);
 }
+
+#endif

@@ -15,6 +15,8 @@
 #include "dpu_hwio.h"
 #include "dpu_hw_lm.h"
 #include "dpu_hw_mdss.h"
+#include "dpu_dbg.h"
+#include "dpu_kms.h"
 
 #define LM_OP_MODE                        0x00
 #define LM_OUT_SIZE                       0x04
@@ -62,10 +64,16 @@ static struct dpu_lm_cfg *_lm_offset(enum dpu_lm mixer,
 static inline int _stage_offset(struct dpu_hw_mixer *ctx, enum dpu_stage stage)
 {
 	const struct dpu_lm_sub_blks *sblk = ctx->cap->sblk;
-	if (stage != DPU_STAGE_BASE && stage <= sblk->maxblendstages)
-		return sblk->blendstage_base[stage - DPU_STAGE_0];
+	int rc;
 
-	return -EINVAL;
+	if (stage == DPU_STAGE_BASE)
+		rc = -EINVAL;
+	else if (stage <= sblk->maxblendstages)
+		rc = sblk->blendstage_base[stage - DPU_STAGE_0];
+	else
+		rc = -EINVAL;
+
+	return rc;
 }
 
 static void dpu_hw_lm_setup_out(struct dpu_hw_mixer *ctx,
@@ -155,6 +163,11 @@ static void dpu_hw_lm_setup_color3(struct dpu_hw_mixer *ctx,
 	DPU_REG_WRITE(c, LM_OP_MODE, op_mode);
 }
 
+static void dpu_hw_lm_gc(struct dpu_hw_mixer *mixer,
+			void *cfg)
+{
+}
+
 static void _setup_mixer_ops(struct dpu_mdss_cfg *m,
 		struct dpu_hw_lm_ops *ops,
 		unsigned long features)
@@ -166,9 +179,13 @@ static void _setup_mixer_ops(struct dpu_mdss_cfg *m,
 		ops->setup_blend_config = dpu_hw_lm_setup_blend_config;
 	ops->setup_alpha_out = dpu_hw_lm_setup_color3;
 	ops->setup_border_color = dpu_hw_lm_setup_border_color;
+	ops->setup_gc = dpu_hw_lm_gc;
 };
 
-static struct dpu_hw_blk_ops dpu_hw_ops;
+static struct dpu_hw_blk_ops dpu_hw_ops = {
+	.start = NULL,
+	.stop = NULL,
+};
 
 struct dpu_hw_mixer *dpu_hw_lm_init(enum dpu_lm idx,
 		void __iomem *addr,
@@ -176,6 +193,7 @@ struct dpu_hw_mixer *dpu_hw_lm_init(enum dpu_lm idx,
 {
 	struct dpu_hw_mixer *c;
 	struct dpu_lm_cfg *cfg;
+	int rc;
 
 	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
@@ -192,9 +210,18 @@ struct dpu_hw_mixer *dpu_hw_lm_init(enum dpu_lm idx,
 	c->cap = cfg;
 	_setup_mixer_ops(m, &c->ops, c->cap->features);
 
-	dpu_hw_blk_init(&c->base, DPU_HW_BLK_LM, idx, &dpu_hw_ops);
+	rc = dpu_hw_blk_init(&c->base, DPU_HW_BLK_LM, idx, &dpu_hw_ops);
+	if (rc) {
+		DPU_ERROR("failed to init hw blk %d\n", rc);
+		goto blk_init_error;
+	}
 
 	return c;
+
+blk_init_error:
+	kzfree(c);
+
+	return ERR_PTR(rc);
 }
 
 void dpu_hw_lm_destroy(struct dpu_hw_mixer *lm)

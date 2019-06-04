@@ -219,12 +219,13 @@ int ordered_events__queue(struct ordered_events *oe, union perf_event *event,
 	return 0;
 }
 
-static int do_flush(struct ordered_events *oe, bool show_progress)
+static int __ordered_events__flush(struct ordered_events *oe)
 {
 	struct list_head *head = &oe->events;
 	struct ordered_event *tmp, *iter;
 	u64 limit = oe->next_flush;
 	u64 last_ts = oe->last ? oe->last->timestamp : 0ULL;
+	bool show_progress = limit == ULLONG_MAX;
 	struct ui_progress prog;
 	int ret;
 
@@ -262,28 +263,21 @@ static int do_flush(struct ordered_events *oe, bool show_progress)
 	return 0;
 }
 
-static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
-				   u64 timestamp)
+int ordered_events__flush(struct ordered_events *oe, enum oe_flush how)
 {
 	static const char * const str[] = {
 		"NONE",
 		"FINAL",
 		"ROUND",
 		"HALF ",
-		"TOP  ",
-		"TIME ",
 	};
 	int err;
-	bool show_progress = false;
 
 	if (oe->nr_events == 0)
 		return 0;
 
 	switch (how) {
 	case OE_FLUSH__FINAL:
-		show_progress = true;
-		__fallthrough;
-	case OE_FLUSH__TOP:
 		oe->next_flush = ULLONG_MAX;
 		break;
 
@@ -304,11 +298,6 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 		break;
 	}
 
-	case OE_FLUSH__TIME:
-		oe->next_flush = timestamp;
-		show_progress = false;
-		break;
-
 	case OE_FLUSH__ROUND:
 	case OE_FLUSH__NONE:
 	default:
@@ -319,7 +308,7 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 		   str[how], oe->nr_events);
 	pr_oe_time(oe->max_timestamp, "max_timestamp\n");
 
-	err = do_flush(oe, show_progress);
+	err = __ordered_events__flush(oe);
 
 	if (!err) {
 		if (how == OE_FLUSH__ROUND)
@@ -335,29 +324,7 @@ static int __ordered_events__flush(struct ordered_events *oe, enum oe_flush how,
 	return err;
 }
 
-int ordered_events__flush(struct ordered_events *oe, enum oe_flush how)
-{
-	return __ordered_events__flush(oe, how, 0);
-}
-
-int ordered_events__flush_time(struct ordered_events *oe, u64 timestamp)
-{
-	return __ordered_events__flush(oe, OE_FLUSH__TIME, timestamp);
-}
-
-u64 ordered_events__first_time(struct ordered_events *oe)
-{
-	struct ordered_event *event;
-
-	if (list_empty(&oe->events))
-		return 0;
-
-	event = list_first_entry(&oe->events, struct ordered_event, list);
-	return event->timestamp;
-}
-
-void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t deliver,
-			  void *data)
+void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t deliver)
 {
 	INIT_LIST_HEAD(&oe->events);
 	INIT_LIST_HEAD(&oe->cache);
@@ -365,7 +332,6 @@ void ordered_events__init(struct ordered_events *oe, ordered_events__deliver_t d
 	oe->max_alloc_size = (u64) -1;
 	oe->cur_alloc_size = 0;
 	oe->deliver	   = deliver;
-	oe->data	   = data;
 }
 
 static void
@@ -393,10 +359,8 @@ void ordered_events__free(struct ordered_events *oe)
 	 * Current buffer might not have all the events allocated
 	 * yet, we need to free only allocated ones ...
 	 */
-	if (oe->buffer) {
-		list_del(&oe->buffer->list);
-		ordered_events_buffer__free(oe->buffer, oe->buffer_idx, oe);
-	}
+	list_del(&oe->buffer->list);
+	ordered_events_buffer__free(oe->buffer, oe->buffer_idx, oe);
 
 	/* ... and continue with the rest */
 	list_for_each_entry_safe(buffer, tmp, &oe->to_free, list) {
@@ -411,5 +375,5 @@ void ordered_events__reinit(struct ordered_events *oe)
 
 	ordered_events__free(oe);
 	memset(oe, '\0', sizeof(*oe));
-	ordered_events__init(oe, old_deliver, oe->data);
+	ordered_events__init(oe, old_deliver);
 }

@@ -25,7 +25,8 @@
 	};
 
 	chosen {
-		stdout-path = "serial2:115200n8";
+		bootargs ="console=ttySAC2,115200";
+		stdout-path = &serial_2;
 	};
 
 	firmware@203f000 {

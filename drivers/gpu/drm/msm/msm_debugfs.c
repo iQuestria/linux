@@ -75,7 +75,7 @@ static int msm_gpu_open(struct inode *inode, struct file *file)
 	struct msm_gpu_show_priv *show_priv;
 	int ret;
 
-	if (!gpu || !gpu->funcs->gpu_state_get)
+	if (!gpu)
 		return -ENODEV;
 
 	show_priv = kmalloc(sizeof(*show_priv), GFP_KERNEL);
@@ -84,7 +84,7 @@ static int msm_gpu_open(struct inode *inode, struct file *file)
 
 	ret = mutex_lock_interruptible(&dev->struct_mutex);
 	if (ret)
-		goto free_priv;
+		return ret;
 
 	pm_runtime_get_sync(&gpu->pdev->dev);
 	show_priv->state = gpu->funcs->gpu_state_get(gpu);
@@ -94,20 +94,13 @@ static int msm_gpu_open(struct inode *inode, struct file *file)
 
 	if (IS_ERR(show_priv->state)) {
 		ret = PTR_ERR(show_priv->state);
-		goto free_priv;
+		kfree(show_priv);
+		return ret;
 	}
 
 	show_priv->dev = dev;
 
-	ret = single_open(file, msm_gpu_show, show_priv);
-	if (ret)
-		goto free_priv;
-
-	return 0;
-
-free_priv:
-	kfree(show_priv);
-	return ret;
+	return single_open(file, msm_gpu_show, show_priv);
 }
 
 static const struct file_operations msm_gpu_fops = {
@@ -201,13 +194,13 @@ static int late_init_minor(struct drm_minor *minor)
 
 	ret = msm_rd_debugfs_init(minor);
 	if (ret) {
-		DRM_DEV_ERROR(minor->dev->dev, "could not install rd debugfs\n");
+		dev_err(minor->dev->dev, "could not install rd debugfs\n");
 		return ret;
 	}
 
 	ret = msm_perf_debugfs_init(minor);
 	if (ret) {
-		DRM_DEV_ERROR(minor->dev->dev, "could not install perf debugfs\n");
+		dev_err(minor->dev->dev, "could not install perf debugfs\n");
 		return ret;
 	}
 
@@ -235,14 +228,14 @@ int msm_debugfs_init(struct drm_minor *minor)
 			minor->debugfs_root, minor);
 
 	if (ret) {
-		DRM_DEV_ERROR(dev->dev, "could not install msm_debugfs_list\n");
+		dev_err(dev->dev, "could not install msm_debugfs_list\n");
 		return ret;
 	}
 
 	debugfs_create_file("gpu", S_IRUSR, minor->debugfs_root,
 		dev, &msm_gpu_fops);
 
-	if (priv->kms && priv->kms->funcs->debugfs_init) {
+	if (priv->kms->funcs->debugfs_init) {
 		ret = priv->kms->funcs->debugfs_init(priv->kms, minor);
 		if (ret)
 			return ret;

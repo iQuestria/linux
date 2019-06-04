@@ -26,7 +26,6 @@
 #include <linux/leds.h>
 #include <linux/device.h>
 #include <linux/slab.h>
-#include <linux/io.h>
 #include <linux/irq.h>
 #include <asm/bootinfo.h>
 #include <asm/idle.h>

@@ -135,7 +135,7 @@ static void mlx5_fpga_conn_notify_hw(struct mlx5_fpga_conn *conn, void *wqe)
 	*conn->qp.wq.sq.db = cpu_to_be32(conn->qp.sq.pc);
 	/* Make sure that doorbell record is visible before ringing */
 	wmb();
-	mlx5_write64(wqe, conn->fdev->conn_res.uar->map + MLX5_BF_OFFSET);
+	mlx5_write64(wqe, conn->fdev->conn_res.uar->map + MLX5_BF_OFFSET, NULL);
 }
 
 static void mlx5_fpga_conn_post_send(struct mlx5_fpga_conn *conn,
@@ -334,7 +334,7 @@ static void mlx5_fpga_conn_handle_cqe(struct mlx5_fpga_conn *conn,
 {
 	u8 opcode, status = 0;
 
-	opcode = get_cqe_opcode(cqe);
+	opcode = cqe->op_own >> 4;
 
 	switch (opcode) {
 	case MLX5_CQE_REQ_ERR:

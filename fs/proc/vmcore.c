@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *	fs/proc/vmcore.c Interface for accessing the crash
  * 				 dump from the system's previous life.

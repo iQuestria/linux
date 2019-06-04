@@ -846,19 +846,6 @@ static int chv_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static void chv_gpio_clear_triggering(struct chv_pinctrl *pctrl,
-				      unsigned int offset)
-{
-	void __iomem *reg;
-	u32 value;
-
-	reg = chv_padreg(pctrl, offset, CHV_PADCTRL1);
-	value = readl(reg);
-	value &= ~CHV_PADCTRL1_INTWAKECFG_MASK;
-	value &= ~CHV_PADCTRL1_INVRXTX_MASK;
-	chv_writel(value, reg);
-}
-
 static int chv_gpio_request_enable(struct pinctrl_dev *pctldev,
 				   struct pinctrl_gpio_range *range,
 				   unsigned int offset)
@@ -889,7 +876,11 @@ static int chv_gpio_request_enable(struct pinctrl_dev *pctldev,
 		}
 
 		/* Disable interrupt generation */
-		chv_gpio_clear_triggering(pctrl, offset);
+		reg = chv_padreg(pctrl, offset, CHV_PADCTRL1);
+		value = readl(reg);
+		value &= ~CHV_PADCTRL1_INTWAKECFG_MASK;
+		value &= ~CHV_PADCTRL1_INVRXTX_MASK;
+		chv_writel(value, reg);
 
 		reg = chv_padreg(pctrl, offset, CHV_PADCTRL0);
 		value = readl(reg);
@@ -921,11 +912,14 @@ static void chv_gpio_disable_free(struct pinctrl_dev *pctldev,
 {
 	struct chv_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
 	unsigned long flags;
+	void __iomem *reg;
+	u32 value;
 
 	raw_spin_lock_irqsave(&chv_lock, flags);
 
-	if (!chv_pad_locked(pctrl, offset))
-		chv_gpio_clear_triggering(pctrl, offset);
+	reg = chv_padreg(pctrl, offset, CHV_PADCTRL0);
+	value = readl(reg) & ~CHV_PADCTRL0_GPIOEN;
+	chv_writel(value, reg);
 
 	raw_spin_unlock_irqrestore(&chv_lock, flags);
 }
@@ -1513,7 +1507,7 @@ static const struct dmi_system_id chv_no_valid_mask[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
 			DMI_MATCH(DMI_PRODUCT_FAMILY, "Intel_Strago"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "1.0"),
+			DMI_MATCH(DMI_BOARD_VERSION, "1.0"),
 		},
 	},
 	{
@@ -1521,7 +1515,7 @@ static const struct dmi_system_id chv_no_valid_mask[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "HP"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Setzer"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "1.0"),
+			DMI_MATCH(DMI_BOARD_VERSION, "1.0"),
 		},
 	},
 	{
@@ -1529,7 +1523,7 @@ static const struct dmi_system_id chv_no_valid_mask[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Cyan"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "1.0"),
+			DMI_MATCH(DMI_BOARD_VERSION, "1.0"),
 		},
 	},
 	{
@@ -1537,7 +1531,7 @@ static const struct dmi_system_id chv_no_valid_mask[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "GOOGLE"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Celes"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "1.0"),
+			DMI_MATCH(DMI_BOARD_VERSION, "1.0"),
 		},
 	},
 	{}
@@ -1750,7 +1744,8 @@ static int chv_pinctrl_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM_SLEEP
 static int chv_pinctrl_suspend_noirq(struct device *dev)
 {
-	struct chv_pinctrl *pctrl = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct chv_pinctrl *pctrl = platform_get_drvdata(pdev);
 	unsigned long flags;
 	int i;
 
@@ -1783,7 +1778,8 @@ static int chv_pinctrl_suspend_noirq(struct device *dev)
 
 static int chv_pinctrl_resume_noirq(struct device *dev)
 {
-	struct chv_pinctrl *pctrl = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct chv_pinctrl *pctrl = platform_get_drvdata(pdev);
 	unsigned long flags;
 	int i;
 

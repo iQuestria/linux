@@ -119,10 +119,7 @@ static int __init sr_dev_init(struct omap_hwmod *oh, void *user)
 	}
 
 	sr_data->name = oh->name;
-	if (cpu_is_omap343x())
-		sr_data->ip_type = 1;
-	else
-		sr_data->ip_type = 2;
+	sr_data->ip_type = oh->class->rev;
 	sr_data->senn_mod = 0x1;
 	sr_data->senp_mod = 0x1;
 

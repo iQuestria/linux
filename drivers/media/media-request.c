@@ -100,7 +100,6 @@ static __poll_t media_request_poll(struct file *filp,
 	if (!(poll_requested_events(wait) & EPOLLPRI))
 		return 0;
 
-	poll_wait(filp, &req->poll_wait, wait);
 	spin_lock_irqsave(&req->lock, flags);
 	if (req->state == MEDIA_REQUEST_STATE_COMPLETE) {
 		ret = EPOLLPRI;
@@ -110,6 +109,8 @@ static __poll_t media_request_poll(struct file *filp,
 		ret = EPOLLERR;
 		goto unlock;
 	}
+
+	poll_wait(filp, &req->poll_wait, wait);
 
 unlock:
 	spin_unlock_irqrestore(&req->lock, flags);
@@ -246,38 +247,38 @@ static const struct file_operations request_fops = {
 struct media_request *
 media_request_get_by_fd(struct media_device *mdev, int request_fd)
 {
-	struct fd f;
+	struct file *filp;
 	struct media_request *req;
 
 	if (!mdev || !mdev->ops ||
 	    !mdev->ops->req_validate || !mdev->ops->req_queue)
-		return ERR_PTR(-EBADR);
+		return ERR_PTR(-EACCES);
 
-	f = fdget(request_fd);
-	if (!f.file)
+	filp = fget(request_fd);
+	if (!filp)
 		goto err_no_req_fd;
 
-	if (f.file->f_op != &request_fops)
+	if (filp->f_op != &request_fops)
 		goto err_fput;
-	req = f.file->private_data;
+	req = filp->private_data;
 	if (req->mdev != mdev)
 		goto err_fput;
 
 	/*
 	 * Note: as long as someone has an open filehandle of the request,
-	 * the request can never be released. The fdget() above ensures that
+	 * the request can never be released. The fget() above ensures that
 	 * even if userspace closes the request filehandle, the release()
 	 * fop won't be called, so the media_request_get() always succeeds
 	 * and there is no race condition where the request was released
 	 * before media_request_get() is called.
 	 */
 	media_request_get(req);
-	fdput(f);
+	fput(filp);
 
 	return req;
 
 err_fput:
-	fdput(f);
+	fput(filp);
 
 err_no_req_fd:
 	dev_dbg(mdev->dev, "cannot find request_fd %d\n", request_fd);
@@ -407,7 +408,7 @@ int media_request_object_bind(struct media_request *req,
 	int ret = -EBUSY;
 
 	if (WARN_ON(!ops->release))
-		return -EBADR;
+		return -EACCES;
 
 	spin_lock_irqsave(&req->lock, flags);
 

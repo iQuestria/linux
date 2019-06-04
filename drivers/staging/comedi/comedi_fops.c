@@ -164,7 +164,6 @@ static bool comedi_clear_board_dev(struct comedi_device *dev)
 	unsigned int i = dev->minor;
 	bool cleared = false;
 
-	lockdep_assert_held(&dev->mutex);
 	mutex_lock(&comedi_board_minor_table_lock);
 	if (dev == comedi_board_minor_table[i]) {
 		comedi_board_minor_table[i] = NULL;
@@ -261,7 +260,6 @@ comedi_read_subdevice(const struct comedi_device *dev, unsigned int minor)
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (minor >= COMEDI_NUM_BOARD_MINORS) {
 		s = comedi_subdevice_from_minor(dev, minor);
 		if (!s || (s->subdev_flags & SDF_CMD_READ))
@@ -275,7 +273,6 @@ comedi_write_subdevice(const struct comedi_device *dev, unsigned int minor)
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (minor >= COMEDI_NUM_BOARD_MINORS) {
 		s = comedi_subdevice_from_minor(dev, minor);
 		if (!s || (s->subdev_flags & SDF_CMD_WRITE))
@@ -338,8 +335,6 @@ static int resize_async_buffer(struct comedi_device *dev,
 {
 	struct comedi_async *async = s->async;
 	int retval;
-
-	lockdep_assert_held(&dev->mutex);
 
 	if (new_size > async->max_bufsize)
 		return -EPERM;
@@ -731,7 +726,6 @@ static void do_become_nonbusy(struct comedi_device *dev,
 {
 	struct comedi_async *async = s->async;
 
-	lockdep_assert_held(&dev->mutex);
 	comedi_update_subdevice_runflags(s, COMEDI_SRF_RUNNING, 0);
 	if (async) {
 		comedi_buf_reset(s);
@@ -751,7 +745,6 @@ static int do_cancel(struct comedi_device *dev, struct comedi_subdevice *s)
 {
 	int ret = 0;
 
-	lockdep_assert_held(&dev->mutex);
 	if (comedi_is_subdevice_running(s) && s->cancel)
 		ret = s->cancel(dev, s);
 
@@ -765,7 +758,6 @@ void comedi_device_cancel_all(struct comedi_device *dev)
 	struct comedi_subdevice *s;
 	int i;
 
-	lockdep_assert_held(&dev->mutex);
 	if (!dev->attached)
 		return;
 
@@ -781,7 +773,6 @@ static int is_device_busy(struct comedi_device *dev)
 	struct comedi_subdevice *s;
 	int i;
 
-	lockdep_assert_held(&dev->mutex);
 	if (!dev->attached)
 		return 0;
 
@@ -814,7 +805,6 @@ static int do_devconfig_ioctl(struct comedi_device *dev,
 {
 	struct comedi_devconfig it;
 
-	lockdep_assert_held(&dev->mutex);
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -870,7 +860,6 @@ static int do_bufconfig_ioctl(struct comedi_device *dev,
 	struct comedi_subdevice *s;
 	int retval = 0;
 
-	lockdep_assert_held(&dev->mutex);
 	if (copy_from_user(&bc, arg, sizeof(bc)))
 		return -EFAULT;
 
@@ -931,7 +920,6 @@ static int do_devinfo_ioctl(struct comedi_device *dev,
 	struct comedi_subdevice *s;
 	struct comedi_devinfo devinfo;
 
-	lockdep_assert_held(&dev->mutex);
 	memset(&devinfo, 0, sizeof(devinfo));
 
 	/* fill devinfo structure */
@@ -978,7 +966,6 @@ static int do_subdinfo_ioctl(struct comedi_device *dev,
 	struct comedi_subdinfo *tmp, *us;
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	tmp = kcalloc(dev->n_subdevices, sizeof(*tmp), GFP_KERNEL);
 	if (!tmp)
 		return -ENOMEM;
@@ -1052,7 +1039,6 @@ static int do_chaninfo_ioctl(struct comedi_device *dev,
 	struct comedi_subdevice *s;
 	struct comedi_chaninfo it;
 
-	lockdep_assert_held(&dev->mutex);
 	if (copy_from_user(&it, arg, sizeof(it)))
 		return -EFAULT;
 
@@ -1112,7 +1098,6 @@ static int do_bufinfo_ioctl(struct comedi_device *dev,
 	int retval = 0;
 	bool become_nonbusy = false;
 
-	lockdep_assert_held(&dev->mutex);
 	if (copy_from_user(&bi, arg, sizeof(bi)))
 		return -EFAULT;
 
@@ -1224,7 +1209,6 @@ static int check_insn_config_length(struct comedi_insn *insn,
 		break;
 	case INSN_CONFIG_PWM_OUTPUT:
 	case INSN_CONFIG_ANALOG_TRIG:
-	case INSN_CONFIG_TIMER_1:
 		if (insn->n == 5)
 			return 0;
 		break;
@@ -1297,7 +1281,6 @@ static int check_insn_device_config_length(struct comedi_insn *insn,
  */
 static int get_valid_routes(struct comedi_device *dev, unsigned int *data)
 {
-	lockdep_assert_held(&dev->mutex);
 	data[1] = dev->get_valid_routes(dev, data[1], data + 2);
 	return 0;
 }
@@ -1309,7 +1292,6 @@ static int parse_insn(struct comedi_device *dev, struct comedi_insn *insn,
 	int ret = 0;
 	int i;
 
-	lockdep_assert_held(&dev->mutex);
 	if (insn->insn & INSN_MASK_SPECIAL) {
 		/* a non-subdevice instruction */
 
@@ -1518,21 +1500,24 @@ out:
  *	data (for reads) to insns[].data pointers
  */
 /* arbitrary limits */
-#define MIN_SAMPLES 16
-#define MAX_SAMPLES 65536
+#define MAX_SAMPLES 256
 static int do_insnlist_ioctl(struct comedi_device *dev,
 			     struct comedi_insnlist __user *arg, void *file)
 {
 	struct comedi_insnlist insnlist;
 	struct comedi_insn *insns = NULL;
 	unsigned int *data = NULL;
-	unsigned int max_n_data_required = MIN_SAMPLES;
 	int i = 0;
 	int ret = 0;
 
-	lockdep_assert_held(&dev->mutex);
 	if (copy_from_user(&insnlist, arg, sizeof(insnlist)))
 		return -EFAULT;
+
+	data = kmalloc_array(MAX_SAMPLES, sizeof(unsigned int), GFP_KERNEL);
+	if (!data) {
+		ret = -ENOMEM;
+		goto error;
+	}
 
 	insns = kcalloc(insnlist.n_insns, sizeof(*insns), GFP_KERNEL);
 	if (!insns) {
@@ -1547,26 +1532,13 @@ static int do_insnlist_ioctl(struct comedi_device *dev,
 		goto error;
 	}
 
-	/* Determine maximum memory needed for all instructions. */
-	for (i = 0; i < insnlist.n_insns; ++i) {
+	for (i = 0; i < insnlist.n_insns; i++) {
 		if (insns[i].n > MAX_SAMPLES) {
 			dev_dbg(dev->class_dev,
 				"number of samples too large\n");
 			ret = -EINVAL;
 			goto error;
 		}
-		max_n_data_required = max(max_n_data_required, insns[i].n);
-	}
-
-	/* Allocate scratch space for all instruction data. */
-	data = kmalloc_array(max_n_data_required, sizeof(unsigned int),
-			     GFP_KERNEL);
-	if (!data) {
-		ret = -ENOMEM;
-		goto error;
-	}
-
-	for (i = 0; i < insnlist.n_insns; ++i) {
 		if (insns[i].insn & INSN_MASK_WRITE) {
 			if (copy_from_user(data, insns[i].data,
 					   insns[i].n * sizeof(unsigned int))) {
@@ -1620,27 +1592,22 @@ static int do_insn_ioctl(struct comedi_device *dev,
 {
 	struct comedi_insn insn;
 	unsigned int *data = NULL;
-	unsigned int n_data = MIN_SAMPLES;
 	int ret = 0;
 
-	lockdep_assert_held(&dev->mutex);
-	if (copy_from_user(&insn, arg, sizeof(insn)))
-		return -EFAULT;
-
-	n_data = max(n_data, insn.n);
-
-	/* This is where the behavior of insn and insnlist deviate. */
-	if (insn.n > MAX_SAMPLES) {
-		insn.n = MAX_SAMPLES;
-		n_data = MAX_SAMPLES;
-	}
-
-	data = kmalloc_array(n_data, sizeof(unsigned int), GFP_KERNEL);
+	data = kmalloc_array(MAX_SAMPLES, sizeof(unsigned int), GFP_KERNEL);
 	if (!data) {
 		ret = -ENOMEM;
 		goto error;
 	}
 
+	if (copy_from_user(&insn, arg, sizeof(insn))) {
+		ret = -EFAULT;
+		goto error;
+	}
+
+	/* This is where the behavior of insn and insnlist deviate. */
+	if (insn.n > MAX_SAMPLES)
+		insn.n = MAX_SAMPLES;
 	if (insn.insn & INSN_MASK_WRITE) {
 		if (copy_from_user(data,
 				   insn.data,
@@ -1674,7 +1641,6 @@ static int __comedi_get_user_cmd(struct comedi_device *dev,
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (copy_from_user(cmd, arg, sizeof(*cmd))) {
 		dev_dbg(dev->class_dev, "bad cmd address\n");
 		return -EFAULT;
@@ -1733,7 +1699,6 @@ static int __comedi_get_user_chanlist(struct comedi_device *dev,
 	unsigned int *chanlist;
 	int ret;
 
-	lockdep_assert_held(&dev->mutex);
 	cmd->chanlist = NULL;
 	chanlist = memdup_user(user_chanlist,
 			       cmd->chanlist_len * sizeof(unsigned int));
@@ -1774,8 +1739,6 @@ static int do_cmd_ioctl(struct comedi_device *dev,
 	struct comedi_async *async;
 	unsigned int __user *user_chanlist;
 	int ret;
-
-	lockdep_assert_held(&dev->mutex);
 
 	/* get the user's cmd and do some simple validation */
 	ret = __comedi_get_user_cmd(dev, arg, &cmd);
@@ -1884,8 +1847,6 @@ static int do_cmdtest_ioctl(struct comedi_device *dev,
 	unsigned int __user *user_chanlist;
 	int ret;
 
-	lockdep_assert_held(&dev->mutex);
-
 	/* get the user's cmd and do some simple validation */
 	ret = __comedi_get_user_cmd(dev, arg, &cmd);
 	if (ret)
@@ -1939,7 +1900,6 @@ static int do_lock_ioctl(struct comedi_device *dev, unsigned long arg,
 	unsigned long flags;
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 	s = &dev->subdevices[arg];
@@ -1972,7 +1932,6 @@ static int do_unlock_ioctl(struct comedi_device *dev, unsigned long arg,
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 	s = &dev->subdevices[arg];
@@ -2007,7 +1966,6 @@ static int do_cancel_ioctl(struct comedi_device *dev, unsigned long arg,
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 	s = &dev->subdevices[arg];
@@ -2041,7 +1999,6 @@ static int do_poll_ioctl(struct comedi_device *dev, unsigned long arg,
 {
 	struct comedi_subdevice *s;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 	s = &dev->subdevices[arg];
@@ -2077,7 +2034,6 @@ static int do_setrsubd_ioctl(struct comedi_device *dev, unsigned long arg,
 	struct comedi_file *cfp = file->private_data;
 	struct comedi_subdevice *s_old, *s_new;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 
@@ -2120,7 +2076,6 @@ static int do_setwsubd_ioctl(struct comedi_device *dev, unsigned long arg,
 	struct comedi_file *cfp = file->private_data;
 	struct comedi_subdevice *s_old, *s_new;
 
-	lockdep_assert_held(&dev->mutex);
 	if (arg >= dev->n_subdevices)
 		return -EINVAL;
 
@@ -3026,7 +2981,6 @@ static int __init comedi_init(void)
 			goto out_cleanup_board_minors;
 		}
 		/* comedi_alloc_board_minor() locked the mutex */
-		lockdep_assert_held(&dev->mutex);
 		mutex_unlock(&dev->mutex);
 	}
 

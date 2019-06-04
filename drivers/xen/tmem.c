@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Xen implementation for transcendent memory (tmem)
  *

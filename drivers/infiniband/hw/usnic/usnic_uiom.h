@@ -90,6 +90,8 @@ void usnic_uiom_free_dev_list(struct device **devs);
 struct usnic_uiom_reg *usnic_uiom_reg_get(struct usnic_uiom_pd *pd,
 						unsigned long addr, size_t size,
 						int access, int dmasync);
-void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr);
+void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr,
+			    struct ib_ucontext *ucontext);
 int usnic_uiom_init(char *drv_name);
+void usnic_uiom_fini(void);
 #endif /* USNIC_UIOM_H_ */

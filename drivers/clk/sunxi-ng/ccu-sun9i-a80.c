@@ -12,7 +12,6 @@
  */
 
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 

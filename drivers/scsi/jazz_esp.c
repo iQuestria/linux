@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* jazz_esp.c: ESP front-end for MIPS JAZZ systems.
  *
  * Copyright (C) 2007 Thomas Bogendörfer (tsbogend@alpha.frankende)

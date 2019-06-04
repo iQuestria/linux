@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* AFS security handling
  *
  * Copyright (C) 2007, 2017 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/init.h>
@@ -83,9 +87,11 @@ void afs_clear_permits(struct afs_vnode *vnode)
 	permits = rcu_dereference_protected(vnode->permit_cache,
 					    lockdep_is_held(&vnode->lock));
 	RCU_INIT_POINTER(vnode->permit_cache, NULL);
+	vnode->cb_break++;
 	spin_unlock(&vnode->lock);
 
-	afs_put_permits(permits);
+	if (permits)
+		afs_put_permits(permits);
 }
 
 /*
@@ -112,10 +118,10 @@ static void afs_hash_permits(struct afs_permits *permits)
  * as the ACL *may* have changed.
  */
 void afs_cache_permit(struct afs_vnode *vnode, struct key *key,
-		      unsigned int cb_break, struct afs_status_cb *scb)
+		      unsigned int cb_break)
 {
 	struct afs_permits *permits, *xpermits, *replacement, *zap, *new = NULL;
-	afs_access_t caller_access = scb->status.caller_access;
+	afs_access_t caller_access = READ_ONCE(vnode->status.caller_access);
 	size_t size = 0;
 	bool changed = false;
 	int i, j;
@@ -142,7 +148,7 @@ void afs_cache_permit(struct afs_vnode *vnode, struct key *key,
 				}
 
 				if (afs_cb_is_broken(cb_break, vnode,
-						     rcu_dereference(vnode->cb_interest))) {
+						     vnode->cb_interest)) {
 					changed = true;
 					break;
 				}
@@ -172,7 +178,7 @@ void afs_cache_permit(struct afs_vnode *vnode, struct key *key,
 		}
 	}
 
-	if (afs_cb_is_broken(cb_break, vnode, rcu_dereference(vnode->cb_interest)))
+	if (afs_cb_is_broken(cb_break, vnode, vnode->cb_interest))
 		goto someone_else_changed_it;
 
 	/* We need a ref on any permits list we want to copy as we'll have to
@@ -249,16 +255,14 @@ found:
 
 	kfree(new);
 
-	rcu_read_lock();
 	spin_lock(&vnode->lock);
 	zap = rcu_access_pointer(vnode->permit_cache);
-	if (!afs_cb_is_broken(cb_break, vnode, rcu_dereference(vnode->cb_interest)) &&
+	if (!afs_cb_is_broken(cb_break, vnode, vnode->cb_interest) &&
 	    zap == permits)
 		rcu_assign_pointer(vnode->permit_cache, replacement);
 	else
 		zap = replacement;
 	spin_unlock(&vnode->lock);
-	rcu_read_unlock();
 	afs_put_permits(zap);
 out_put:
 	afs_put_permits(permits);
@@ -318,12 +322,13 @@ int afs_check_permit(struct afs_vnode *vnode, struct key *key,
 		 */
 		_debug("no valid permit");
 
-		ret = afs_fetch_status(vnode, key, false, _access);
+		ret = afs_fetch_status(vnode, key, false);
 		if (ret < 0) {
 			*_access = 0;
 			_leave(" = %d", ret);
 			return ret;
 		}
+		*_access = vnode->status.caller_access;
 	}
 
 	_leave(" = 0 [access %x]", *_access);

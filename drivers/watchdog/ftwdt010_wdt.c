@@ -124,6 +124,7 @@ static const struct watchdog_info ftwdt010_wdt_info = {
 static int ftwdt010_wdt_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct ftwdt010_wdt *gwdt;
 	unsigned int reg;
 	int irq;
@@ -133,7 +134,8 @@ static int ftwdt010_wdt_probe(struct platform_device *pdev)
 	if (!gwdt)
 		return -ENOMEM;
 
-	gwdt->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	gwdt->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(gwdt->base))
 		return PTR_ERR(gwdt->base);
 
@@ -169,7 +171,7 @@ static int ftwdt010_wdt_probe(struct platform_device *pdev)
 
 	ret = devm_watchdog_register_device(dev, &gwdt->wdd);
 	if (ret) {
-		dev_err(dev, "failed to register watchdog\n");
+		dev_err(&pdev->dev, "failed to register watchdog\n");
 		return ret;
 	}
 

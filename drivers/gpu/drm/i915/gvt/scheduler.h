@@ -61,7 +61,7 @@ struct shadow_indirect_ctx {
 	unsigned long guest_gma;
 	unsigned long shadow_gma;
 	void *shadow_va;
-	u32 size;
+	uint32_t size;
 };
 
 #define PER_CTX_ADDR_MASK 0xfffff000
@@ -83,7 +83,6 @@ struct intel_vgpu_workload {
 	struct i915_request *req;
 	/* if this workload has been dispatched to i915? */
 	bool dispatched;
-	bool shadow;      /* if workload has done shadow of guest request */
 	int status;
 
 	struct intel_vgpu_mm *shadow_mm;
@@ -142,12 +141,12 @@ void intel_gvt_wait_vgpu_idle(struct intel_vgpu *vgpu);
 int intel_vgpu_setup_submission(struct intel_vgpu *vgpu);
 
 void intel_vgpu_reset_submission(struct intel_vgpu *vgpu,
-				 intel_engine_mask_t engine_mask);
+				 unsigned long engine_mask);
 
 void intel_vgpu_clean_submission(struct intel_vgpu *vgpu);
 
 int intel_vgpu_select_submission_ops(struct intel_vgpu *vgpu,
-				     intel_engine_mask_t engine_mask,
+				     unsigned long engine_mask,
 				     unsigned int interface);
 
 extern const struct intel_vgpu_submission_ops
@@ -160,6 +159,6 @@ intel_vgpu_create_workload(struct intel_vgpu *vgpu, int ring_id,
 void intel_vgpu_destroy_workload(struct intel_vgpu_workload *workload);
 
 void intel_vgpu_clean_workloads(struct intel_vgpu *vgpu,
-				intel_engine_mask_t engine_mask);
+				unsigned long engine_mask);
 
 #endif

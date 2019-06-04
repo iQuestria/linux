@@ -326,7 +326,6 @@ dma_reset:
 static void fotg210_start_dma(struct fotg210_ep *ep,
 			struct fotg210_request *req)
 {
-	struct device *dev = &ep->fotg210->gadget.dev;
 	dma_addr_t d;
 	u8 *buffer;
 	u32 length;
@@ -349,13 +348,17 @@ static void fotg210_start_dma(struct fotg210_ep *ep,
 			length = req->req.length;
 	}
 
-	d = dma_map_single(dev, buffer, length,
+	d = dma_map_single(NULL, buffer, length,
 			ep->dir_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 
-	if (dma_mapping_error(dev, d)) {
+	if (dma_mapping_error(NULL, d)) {
 		pr_err("dma_mapping_error\n");
 		return;
 	}
+
+	dma_sync_single_for_device(NULL, d, length,
+				   ep->dir_in ? DMA_TO_DEVICE :
+					DMA_FROM_DEVICE);
 
 	fotg210_enable_dma(ep, d, length);
 
@@ -367,7 +370,7 @@ static void fotg210_start_dma(struct fotg210_ep *ep,
 	/* update actual transfer length */
 	req->req.actual += length;
 
-	dma_unmap_single(dev, d, length, DMA_TO_DEVICE);
+	dma_unmap_single(NULL, d, length, DMA_TO_DEVICE);
 }
 
 static void fotg210_ep0_queue(struct fotg210_ep *ep,

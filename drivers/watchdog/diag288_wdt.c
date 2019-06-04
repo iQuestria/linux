@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Watchdog driver for z/VM and LPAR using the diag 288 interface.
  *

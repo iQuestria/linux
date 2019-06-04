@@ -202,13 +202,6 @@ struct dm_pool_metadata {
 	bool fail_io:1;
 
 	/*
-	 * Set once a thin-pool has been accessed through one of the interfaces
-	 * that imply the pool is in-service (e.g. thin devices created/deleted,
-	 * thin-pool message, metadata snapshots, etc).
-	 */
-	bool in_service:1;
-
-	/*
 	 * Reading the space map roots can fail, so we read it into these
 	 * buffers before the superblock is locked and updated.
 	 */
@@ -370,32 +363,6 @@ static int subtree_equal(void *context, const void *value1_le, const void *value
 	memcpy(&v2_le, value2_le, sizeof(v2_le));
 
 	return v1_le == v2_le;
-}
-
-/*----------------------------------------------------------------*/
-
-/*
- * Variant that is used for in-core only changes or code that
- * shouldn't put the pool in service on its own (e.g. commit).
- */
-static inline void __pmd_write_lock(struct dm_pool_metadata *pmd)
-	__acquires(pmd->root_lock)
-{
-	down_write(&pmd->root_lock);
-}
-#define pmd_write_lock_in_core(pmd) __pmd_write_lock((pmd))
-
-static inline void pmd_write_lock(struct dm_pool_metadata *pmd)
-{
-	__pmd_write_lock(pmd);
-	if (unlikely(!pmd->in_service))
-		pmd->in_service = true;
-}
-
-static inline void pmd_write_unlock(struct dm_pool_metadata *pmd)
-	__releases(pmd->root_lock)
-{
-	up_write(&pmd->root_lock);
 }
 
 /*----------------------------------------------------------------*/
@@ -823,9 +790,6 @@ static int __commit_transaction(struct dm_pool_metadata *pmd)
 	 */
 	BUILD_BUG_ON(sizeof(struct thin_disk_superblock) > 512);
 
-	if (unlikely(!pmd->in_service))
-		return 0;
-
 	r = __write_changed_details(pmd);
 	if (r < 0)
 		return r;
@@ -889,7 +853,6 @@ struct dm_pool_metadata *dm_pool_metadata_open(struct block_device *bdev,
 	pmd->time = 0;
 	INIT_LIST_HEAD(&pmd->thin_devices);
 	pmd->fail_io = false;
-	pmd->in_service = false;
 	pmd->bdev = bdev;
 	pmd->data_block_size = data_block_size;
 
@@ -940,6 +903,7 @@ int dm_pool_metadata_close(struct dm_pool_metadata *pmd)
 			DMWARN("%s: __commit_transaction() failed, error = %d",
 			       __func__, r);
 	}
+
 	if (!pmd->fail_io)
 		__destroy_persistent_data_objects(pmd);
 
@@ -1068,10 +1032,10 @@ int dm_pool_create_thin(struct dm_pool_metadata *pmd, dm_thin_id dev)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __create_thin(pmd, dev);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1159,10 +1123,10 @@ int dm_pool_create_snap(struct dm_pool_metadata *pmd,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __create_snap(pmd, dev, origin);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1202,10 +1166,10 @@ int dm_pool_delete_thin_device(struct dm_pool_metadata *pmd,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __delete_device(pmd, dev);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1216,7 +1180,7 @@ int dm_pool_set_metadata_transaction_id(struct dm_pool_metadata *pmd,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 
 	if (pmd->fail_io)
 		goto out;
@@ -1230,7 +1194,7 @@ int dm_pool_set_metadata_transaction_id(struct dm_pool_metadata *pmd,
 	r = 0;
 
 out:
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1261,12 +1225,7 @@ static int __reserve_metadata_snap(struct dm_pool_metadata *pmd)
 	 * We commit to ensure the btree roots which we increment in a
 	 * moment are up to date.
 	 */
-	r = __commit_transaction(pmd);
-	if (r < 0) {
-		DMWARN("%s: __commit_transaction() failed, error = %d",
-		       __func__, r);
-		return r;
-	}
+	__commit_transaction(pmd);
 
 	/*
 	 * Copy the superblock.
@@ -1324,10 +1283,10 @@ int dm_pool_reserve_metadata_snap(struct dm_pool_metadata *pmd)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __reserve_metadata_snap(pmd);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1372,10 +1331,10 @@ int dm_pool_release_metadata_snap(struct dm_pool_metadata *pmd)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __release_metadata_snap(pmd);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1418,19 +1377,19 @@ int dm_pool_open_thin_device(struct dm_pool_metadata *pmd, dm_thin_id dev,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock_in_core(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __open_device(pmd, dev, 0, td);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
 
 int dm_pool_close_thin_device(struct dm_thin_device *td)
 {
-	pmd_write_lock_in_core(td->pmd);
+	down_write(&td->pmd->root_lock);
 	__close_device(td);
-	pmd_write_unlock(td->pmd);
+	up_write(&td->pmd->root_lock);
 
 	return 0;
 }
@@ -1611,10 +1570,10 @@ int dm_thin_insert_block(struct dm_thin_device *td, dm_block_t block,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(td->pmd);
+	down_write(&td->pmd->root_lock);
 	if (!td->pmd->fail_io)
 		r = __insert(td, block, data_block);
-	pmd_write_unlock(td->pmd);
+	up_write(&td->pmd->root_lock);
 
 	return r;
 }
@@ -1698,10 +1657,10 @@ int dm_thin_remove_block(struct dm_thin_device *td, dm_block_t block)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(td->pmd);
+	down_write(&td->pmd->root_lock);
 	if (!td->pmd->fail_io)
 		r = __remove(td, block);
-	pmd_write_unlock(td->pmd);
+	up_write(&td->pmd->root_lock);
 
 	return r;
 }
@@ -1711,15 +1670,15 @@ int dm_thin_remove_range(struct dm_thin_device *td,
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(td->pmd);
+	down_write(&td->pmd->root_lock);
 	if (!td->pmd->fail_io)
 		r = __remove_range(td, begin, end);
-	pmd_write_unlock(td->pmd);
+	up_write(&td->pmd->root_lock);
 
 	return r;
 }
 
-int dm_pool_block_is_shared(struct dm_pool_metadata *pmd, dm_block_t b, bool *result)
+int dm_pool_block_is_used(struct dm_pool_metadata *pmd, dm_block_t b, bool *result)
 {
 	int r;
 	uint32_t ref_count;
@@ -1727,7 +1686,7 @@ int dm_pool_block_is_shared(struct dm_pool_metadata *pmd, dm_block_t b, bool *re
 	down_read(&pmd->root_lock);
 	r = dm_sm_get_count(pmd->data_sm, b, &ref_count);
 	if (!r)
-		*result = (ref_count > 1);
+		*result = (ref_count != 0);
 	up_read(&pmd->root_lock);
 
 	return r;
@@ -1737,13 +1696,13 @@ int dm_pool_inc_data_range(struct dm_pool_metadata *pmd, dm_block_t b, dm_block_
 {
 	int r = 0;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	for (; b != e; b++) {
 		r = dm_sm_inc_block(pmd->data_sm, b);
 		if (r)
 			break;
 	}
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1752,13 +1711,13 @@ int dm_pool_dec_data_range(struct dm_pool_metadata *pmd, dm_block_t b, dm_block_
 {
 	int r = 0;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	for (; b != e; b++) {
 		r = dm_sm_dec_block(pmd->data_sm, b);
 		if (r)
 			break;
 	}
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1806,10 +1765,10 @@ int dm_pool_alloc_data_block(struct dm_pool_metadata *pmd, dm_block_t *result)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = dm_sm_new_block(pmd->data_sm, result);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1818,16 +1777,12 @@ int dm_pool_commit_metadata(struct dm_pool_metadata *pmd)
 {
 	int r = -EINVAL;
 
-	/*
-	 * Care is taken to not have commit be what
-	 * triggers putting the thin-pool in-service.
-	 */
-	__pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (pmd->fail_io)
 		goto out;
 
 	r = __commit_transaction(pmd);
-	if (r < 0)
+	if (r <= 0)
 		goto out;
 
 	/*
@@ -1835,7 +1790,7 @@ int dm_pool_commit_metadata(struct dm_pool_metadata *pmd)
 	 */
 	r = __begin_transaction(pmd);
 out:
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 	return r;
 }
 
@@ -1851,7 +1806,7 @@ int dm_pool_abort_metadata(struct dm_pool_metadata *pmd)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (pmd->fail_io)
 		goto out;
 
@@ -1862,7 +1817,7 @@ int dm_pool_abort_metadata(struct dm_pool_metadata *pmd)
 		pmd->fail_io = true;
 
 out:
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -1993,10 +1948,10 @@ int dm_pool_resize_data_dev(struct dm_pool_metadata *pmd, dm_block_t new_count)
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io)
 		r = __resize_space_map(pmd->data_sm, new_count);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -2005,29 +1960,29 @@ int dm_pool_resize_metadata_dev(struct dm_pool_metadata *pmd, dm_block_t new_cou
 {
 	int r = -EINVAL;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	if (!pmd->fail_io) {
 		r = __resize_space_map(pmd->metadata_sm, new_count);
 		if (!r)
 			__set_metadata_reserve(pmd);
 	}
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
 
 void dm_pool_metadata_read_only(struct dm_pool_metadata *pmd)
 {
-	pmd_write_lock_in_core(pmd);
+	down_write(&pmd->root_lock);
 	dm_bm_set_read_only(pmd->bm);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 }
 
 void dm_pool_metadata_read_write(struct dm_pool_metadata *pmd)
 {
-	pmd_write_lock_in_core(pmd);
+	down_write(&pmd->root_lock);
 	dm_bm_set_read_write(pmd->bm);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 }
 
 int dm_pool_register_metadata_threshold(struct dm_pool_metadata *pmd,
@@ -2037,9 +1992,9 @@ int dm_pool_register_metadata_threshold(struct dm_pool_metadata *pmd,
 {
 	int r;
 
-	pmd_write_lock_in_core(pmd);
+	down_write(&pmd->root_lock);
 	r = dm_sm_register_threshold_callback(pmd->metadata_sm, threshold, fn, context);
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 
 	return r;
 }
@@ -2050,7 +2005,7 @@ int dm_pool_metadata_set_needs_check(struct dm_pool_metadata *pmd)
 	struct dm_block *sblock;
 	struct thin_disk_superblock *disk_super;
 
-	pmd_write_lock(pmd);
+	down_write(&pmd->root_lock);
 	pmd->flags |= THIN_METADATA_NEEDS_CHECK_FLAG;
 
 	r = superblock_lock(pmd, &sblock);
@@ -2064,7 +2019,7 @@ int dm_pool_metadata_set_needs_check(struct dm_pool_metadata *pmd)
 
 	dm_bm_unlock(sblock);
 out:
-	pmd_write_unlock(pmd);
+	up_write(&pmd->root_lock);
 	return r;
 }
 

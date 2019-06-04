@@ -166,11 +166,9 @@ static unsigned int tifm_ms_write_data(struct tifm_ms *host,
 	case 3:
 		host->io_word |= buf[off + 2] << 16;
 		host->io_pos++;
-		/* fall through */
 	case 2:
 		host->io_word |= buf[off + 1] << 8;
 		host->io_pos++;
-		/* fall through */
 	case 1:
 		host->io_word |= buf[off];
 		host->io_pos++;
@@ -256,6 +254,7 @@ static unsigned int tifm_ms_transfer_data(struct tifm_ms *host)
 static int tifm_ms_issue_cmd(struct tifm_ms *host)
 {
 	struct tifm_dev *sock = host->dev;
+	unsigned char *data;
 	unsigned int data_len, cmd, sys_param;
 
 	host->cmd_flags = 0;
@@ -263,6 +262,8 @@ static int tifm_ms_issue_cmd(struct tifm_ms *host)
 	host->io_pos = 0;
 	host->io_word = 0;
 	host->cmd_flags = 0;
+
+	data = host->req->data;
 
 	host->use_dma = !no_dma;
 

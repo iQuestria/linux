@@ -1,8 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) Paul Mackerras 1997.
  *
  * Adapted for 64 bit LE PowerPC by Andrew Tauferner
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
  */
 
 #include "ppc_asm.h"
@@ -10,7 +15,7 @@
 RELA = 7
 RELACOUNT = 0x6ffffff9
 
-	.data
+	.text
 	/* A procedure descriptor used when booting this as a COFF file.
 	 * When making COFF, this comes first in the link and we're
 	 * linked at 0x500000.
@@ -18,8 +23,6 @@ RELACOUNT = 0x6ffffff9
 	.globl	_zimage_start_opd
 _zimage_start_opd:
 	.long	0x500000, 0, 0, 0
-	.text
-	b	_zimage_start
 
 #ifdef __powerpc64__
 .balign 8

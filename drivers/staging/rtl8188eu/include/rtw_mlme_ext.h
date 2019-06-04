@@ -80,8 +80,15 @@
 #define		_48M_RATE_	10
 #define		_54M_RATE_	11
 
-extern const u8 RTW_WPA_OUI[];
-extern const u8 WPS_OUI[];
+
+extern unsigned char RTW_WPA_OUI[];
+extern unsigned char WMM_OUI[];
+extern unsigned char WPS_OUI[];
+extern unsigned char WFD_OUI[];
+extern unsigned char P2P_OUI[];
+
+extern unsigned char WMM_INFO_OUI[];
+extern unsigned char WMM_PARA_OUI[];
 
 /*  Channel Plan Type. */
 /*  Note: */
@@ -573,8 +580,8 @@ void addba_timer_hdl(struct timer_list *t);
 	mod_timer(&mlmeext->link_timer, jiffies +	\
 		  msecs_to_jiffies(ms))
 
-bool cckrates_included(unsigned char *rate, int ratelen);
-bool cckratesonly_included(unsigned char *rate, int ratelen);
+int cckrates_included(unsigned char *rate, int ratelen);
+int cckratesonly_included(unsigned char *rate, int ratelen);
 
 void process_addba_req(struct adapter *padapter, u8 *paddba_req, u8 *addr);
 

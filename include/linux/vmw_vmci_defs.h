@@ -17,7 +17,6 @@
 #define _VMW_VMCI_DEF_H_
 
 #include <linux/atomic.h>
-#include <linux/bits.h>
 
 /* Register offsets. */
 #define VMCI_STATUS_ADDR      0x00
@@ -34,27 +33,26 @@
 #define VMCI_MAX_DEVICES 1
 
 /* Status register bits. */
-#define VMCI_STATUS_INT_ON     BIT(0)
+#define VMCI_STATUS_INT_ON     0x1
 
 /* Control register bits. */
-#define VMCI_CONTROL_RESET        BIT(0)
-#define VMCI_CONTROL_INT_ENABLE   BIT(1)
-#define VMCI_CONTROL_INT_DISABLE  BIT(2)
+#define VMCI_CONTROL_RESET        0x1
+#define VMCI_CONTROL_INT_ENABLE   0x2
+#define VMCI_CONTROL_INT_DISABLE  0x4
 
 /* Capabilities register bits. */
-#define VMCI_CAPS_HYPERCALL     BIT(0)
-#define VMCI_CAPS_GUESTCALL     BIT(1)
-#define VMCI_CAPS_DATAGRAM      BIT(2)
-#define VMCI_CAPS_NOTIFICATIONS BIT(3)
-#define VMCI_CAPS_PPN64         BIT(4)
+#define VMCI_CAPS_HYPERCALL     0x1
+#define VMCI_CAPS_GUESTCALL     0x2
+#define VMCI_CAPS_DATAGRAM      0x4
+#define VMCI_CAPS_NOTIFICATIONS 0x8
 
 /* Interrupt Cause register bits. */
-#define VMCI_ICR_DATAGRAM      BIT(0)
-#define VMCI_ICR_NOTIFICATION  BIT(1)
+#define VMCI_ICR_DATAGRAM      0x1
+#define VMCI_ICR_NOTIFICATION  0x2
 
 /* Interrupt Mask register bits. */
-#define VMCI_IMR_DATAGRAM      BIT(0)
-#define VMCI_IMR_NOTIFICATION  BIT(1)
+#define VMCI_IMR_DATAGRAM      0x1
+#define VMCI_IMR_NOTIFICATION  0x2
 
 /* Maximum MSI/MSI-X interrupt vectors in the device. */
 #define VMCI_MAX_INTRS 2
@@ -464,9 +462,9 @@ struct vmci_datagram {
  * datagram callback is invoked in a delayed context (not interrupt context).
  */
 #define VMCI_FLAG_DG_NONE          0
-#define VMCI_FLAG_WELLKNOWN_DG_HND BIT(0)
-#define VMCI_FLAG_ANYCID_DG_HND    BIT(1)
-#define VMCI_FLAG_DG_DELAYED_CB    BIT(2)
+#define VMCI_FLAG_WELLKNOWN_DG_HND 0x1
+#define VMCI_FLAG_ANYCID_DG_HND    0x2
+#define VMCI_FLAG_DG_DELAYED_CB    0x4
 
 /*
  * Maximum supported size of a VMCI datagram for routable datagrams.
@@ -571,10 +569,8 @@ struct vmci_resource_query_msg {
  */
 struct vmci_notify_bm_set_msg {
 	struct vmci_datagram hdr;
-	union {
-		u32 bitmap_ppn32;
-		u64 bitmap_ppn64;
-	};
+	u32 bitmap_ppn;
+	u32 _pad;
 };
 
 /*
@@ -695,7 +691,7 @@ struct vmci_qp_detach_msg {
 };
 
 /* VMCI Doorbell API. */
-#define VMCI_FLAG_DELAYED_CB BIT(0)
+#define VMCI_FLAG_DELAYED_CB 0x01
 
 typedef void (*vmci_callback) (void *client_data);
 

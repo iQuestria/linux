@@ -8,7 +8,6 @@
 #include <linux/wait.h>
 
 #include <net/inet_common.h>
-#include <net/tls.h>
 
 static bool tcp_bpf_stream_read(const struct sock *sk)
 {
@@ -27,10 +26,7 @@ static int tcp_bpf_wait_data(struct sock *sk, struct sk_psock *psock,
 			     int flags, long timeo, int *err)
 {
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
-	int ret = 0;
-
-	if (!timeo)
-		return ret;
+	int ret;
 
 	add_wait_queue(sk_sleep(sk), &wait);
 	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
@@ -202,7 +198,7 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 		msg->sg.start = i;
 		msg->sg.size -= apply_bytes;
 		sk_psock_queue_msg(psock, tmp);
-		sk_psock_data_ready(sk, psock);
+		sk->sk_data_ready(sk);
 	} else {
 		sk_msg_free(sk, tmp);
 		kfree(tmp);
@@ -222,8 +218,6 @@ static int tcp_bpf_push(struct sock *sk, struct sk_msg *msg, u32 apply_bytes,
 	u32 off;
 
 	while (1) {
-		bool has_tx_ulp;
-
 		sge = sk_msg_elem(msg, msg->sg.start);
 		size = (apply && apply_bytes < sge->length) ?
 			apply_bytes : sge->length;
@@ -232,15 +226,7 @@ static int tcp_bpf_push(struct sock *sk, struct sk_msg *msg, u32 apply_bytes,
 
 		tcp_rate_check_app_limited(sk);
 retry:
-		has_tx_ulp = tls_sw_has_ctx_tx(sk);
-		if (has_tx_ulp) {
-			flags |= MSG_SENDPAGE_NOPOLICY;
-			ret = kernel_sendpage_locked(sk,
-						     page, off, size, flags);
-		} else {
-			ret = do_tcp_sendpages(sk, page, off, size, flags);
-		}
-
+		ret = do_tcp_sendpages(sk, page, off, size, flags);
 		if (ret <= 0)
 			return ret;
 		if (apply)
@@ -303,23 +289,12 @@ static int tcp_bpf_send_verdict(struct sock *sk, struct sk_psock *psock,
 {
 	bool cork = false, enospc = msg->sg.start == msg->sg.end;
 	struct sock *sk_redir;
-	u32 tosend, delta = 0;
+	u32 tosend;
 	int ret;
 
 more_data:
-	if (psock->eval == __SK_NONE) {
-		/* Track delta in msg size to add/subtract it on SK_DROP from
-		 * returned to user copied size. This ensures user doesn't
-		 * get a positive return code with msg_cut_data and SK_DROP
-		 * verdict.
-		 */
-		delta = msg->sg.size;
+	if (psock->eval == __SK_NONE)
 		psock->eval = sk_psock_msg_verdict(sk, psock, msg);
-		if (msg->sg.size < delta)
-			delta -= msg->sg.size;
-		else
-			delta = 0;
-	}
 
 	if (msg->cork_bytes &&
 	    msg->cork_bytes > msg->sg.size && !enospc) {
@@ -375,7 +350,7 @@ more_data:
 	default:
 		sk_msg_free_partial(sk, msg, tosend);
 		sk_msg_apply_bytes(psock, tosend);
-		*copied -= (tosend + delta);
+		*copied -= tosend;
 		return -EACCES;
 	}
 
@@ -531,6 +506,8 @@ static void tcp_bpf_remove(struct sock *sk, struct sk_psock *psock)
 {
 	struct sk_psock_link *link;
 
+	sk_psock_cork_free(psock);
+	__sk_psock_purge_ingress_msg(psock);
 	while ((link = sk_psock_link_pop(psock))) {
 		sk_psock_unlink(sk, link);
 		sk_psock_free_link(link);

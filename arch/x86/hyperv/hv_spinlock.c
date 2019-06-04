@@ -56,7 +56,7 @@ static void hv_qlock_wait(u8 *byte, u8 val)
 /*
  * Hyper-V does not support this so far.
  */
-__visible bool hv_vcpu_is_preempted(int vcpu)
+bool hv_vcpu_is_preempted(int vcpu)
 {
 	return false;
 }

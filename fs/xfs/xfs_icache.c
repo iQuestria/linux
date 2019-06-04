@@ -70,11 +70,6 @@ xfs_inode_alloc(
 	ip->i_flags = 0;
 	ip->i_delayed_blks = 0;
 	memset(&ip->i_d, 0, sizeof(ip->i_d));
-	ip->i_sick = 0;
-	ip->i_checked = 0;
-	INIT_WORK(&ip->i_ioend_work, xfs_end_io);
-	INIT_LIST_HEAD(&ip->i_ioend_list);
-	spin_lock_init(&ip->i_ioend_lock);
 
 	return ip;
 }
@@ -451,8 +446,6 @@ xfs_iget_cache_hit(
 		ip->i_flags |= XFS_INEW;
 		xfs_inode_clear_reclaim_tag(pag, ip->i_ino);
 		inode->i_state = I_NEW;
-		ip->i_sick = 0;
-		ip->i_checked = 0;
 
 		ASSERT(!rwsem_is_locked(&inode->i_rwsem));
 		init_rwsem(&inode->i_rwsem);
@@ -1822,7 +1815,7 @@ xfs_inode_clear_cowblocks_tag(
 
 /* Disable post-EOF and CoW block auto-reclamation. */
 void
-xfs_stop_block_reaping(
+xfs_icache_disable_reclaim(
 	struct xfs_mount	*mp)
 {
 	cancel_delayed_work_sync(&mp->m_eofblocks_work);
@@ -1831,7 +1824,7 @@ xfs_stop_block_reaping(
 
 /* Enable post-EOF and CoW block auto-reclamation. */
 void
-xfs_start_block_reaping(
+xfs_icache_enable_reclaim(
 	struct xfs_mount	*mp)
 {
 	xfs_queue_eofblocks(mp);

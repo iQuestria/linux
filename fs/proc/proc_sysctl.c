@@ -13,7 +13,6 @@
 #include <linux/namei.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/bpf-cgroup.h>
 #include "internal.h"
 
 static const struct dentry_operations proc_sys_dentry_operations;
@@ -465,7 +464,7 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 
 	inode = new_inode(sb);
 	if (!inode)
-		return ERR_PTR(-ENOMEM);
+		goto out;
 
 	inode->i_ino = get_next_ino();
 
@@ -475,7 +474,8 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 	if (unlikely(head->unregistering)) {
 		spin_unlock(&sysctl_lock);
 		iput(inode);
-		return ERR_PTR(-ENOENT);
+		inode = NULL;
+		goto out;
 	}
 	ei->sysctl = head;
 	ei->sysctl_entry = table;
@@ -500,6 +500,7 @@ static struct inode *proc_sys_make_inode(struct super_block *sb,
 	if (root->set_ownership)
 		root->set_ownership(head, table, &inode->i_uid, &inode->i_gid);
 
+out:
 	return inode;
 }
 
@@ -548,11 +549,10 @@ static struct dentry *proc_sys_lookup(struct inode *dir, struct dentry *dentry,
 			goto out;
 	}
 
+	err = ERR_PTR(-ENOMEM);
 	inode = proc_sys_make_inode(dir->i_sb, h ? h : head, p);
-	if (IS_ERR(inode)) {
-		err = ERR_CAST(inode);
+	if (!inode)
 		goto out;
-	}
 
 	d_set_d_op(dentry, &proc_sys_dentry_operations);
 	err = d_splice_alias(inode, dentry);
@@ -570,8 +570,8 @@ static ssize_t proc_sys_call_handler(struct file *filp, void __user *buf,
 	struct inode *inode = file_inode(filp);
 	struct ctl_table_header *head = grab_header(inode);
 	struct ctl_table *table = PROC_I(inode)->sysctl_entry;
-	void *new_buf = NULL;
 	ssize_t error;
+	size_t res;
 
 	if (IS_ERR(head))
 		return PTR_ERR(head);
@@ -589,27 +589,11 @@ static ssize_t proc_sys_call_handler(struct file *filp, void __user *buf,
 	if (!table->proc_handler)
 		goto out;
 
-	error = BPF_CGROUP_RUN_PROG_SYSCTL(head, table, write, buf, &count,
-					   ppos, &new_buf);
-	if (error)
-		goto out;
-
 	/* careful: calling conventions are nasty here */
-	if (new_buf) {
-		mm_segment_t old_fs;
-
-		old_fs = get_fs();
-		set_fs(KERNEL_DS);
-		error = table->proc_handler(table, write, (void __user *)new_buf,
-					    &count, ppos);
-		set_fs(old_fs);
-		kfree(new_buf);
-	} else {
-		error = table->proc_handler(table, write, buf, &count, ppos);
-	}
-
+	res = count;
+	error = table->proc_handler(table, write, buf, &res, ppos);
 	if (!error)
-		error = count;
+		error = res;
 out:
 	sysctl_head_finish(head);
 
@@ -701,7 +685,7 @@ static bool proc_sys_fill_cache(struct file *file,
 		if (d_in_lookup(child)) {
 			struct dentry *res;
 			inode = proc_sys_make_inode(dir->d_sb, head, table);
-			if (IS_ERR(inode)) {
+			if (!inode) {
 				d_lookup_done(child);
 				dput(child);
 				return false;
@@ -1643,11 +1627,8 @@ static void drop_sysctl_table(struct ctl_table_header *header)
 	if (--header->nreg)
 		return;
 
-	if (parent) {
-		put_links(header);
-		start_unregistering(header);
-	}
-
+	put_links(header);
+	start_unregistering(header);
 	if (!--header->count)
 		kfree_rcu(header, rcu);
 

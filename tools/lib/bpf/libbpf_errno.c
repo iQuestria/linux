@@ -7,7 +7,6 @@
  * Copyright (C) 2017 Nicira, Inc.
  */
 
-#undef _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 

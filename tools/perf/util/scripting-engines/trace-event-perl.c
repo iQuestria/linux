@@ -37,8 +37,6 @@
 #include "../../perf.h"
 #include "../callchain.h"
 #include "../machine.h"
-#include "../map.h"
-#include "../symbol.h"
 #include "../thread.h"
 #include "../event.h"
 #include "../trace-event.h"
@@ -191,7 +189,7 @@ static void define_flag_field(const char *ev_name,
 	LEAVE;
 }
 
-static void define_event_symbols(struct tep_event *event,
+static void define_event_symbols(struct tep_event_format *event,
 				 const char *ev_name,
 				 struct tep_print_arg *args)
 {
@@ -340,7 +338,7 @@ static void perl_process_tracepoint(struct perf_sample *sample,
 				    struct addr_location *al)
 {
 	struct thread *thread = al->thread;
-	struct tep_event *event = evsel->tp_format;
+	struct tep_event_format *event = evsel->tp_format;
 	struct tep_format_field *field;
 	static char handler[256];
 	unsigned long long val;
@@ -372,7 +370,7 @@ static void perl_process_tracepoint(struct perf_sample *sample,
 	ns = nsecs - s * NSEC_PER_SEC;
 
 	scripting_context->event_data = data;
-	scripting_context->pevent = evsel->tp_format->tep;
+	scripting_context->pevent = evsel->tp_format->pevent;
 
 	ENTER;
 	SAVETMPS;
@@ -539,7 +537,7 @@ static int perl_stop_script(void)
 
 static int perl_generate_script(struct tep_handle *pevent, const char *outfile)
 {
-	struct tep_event *event = NULL;
+	struct tep_event_format *event = NULL;
 	struct tep_format_field *f;
 	char fname[PATH_MAX];
 	int not_first, count;

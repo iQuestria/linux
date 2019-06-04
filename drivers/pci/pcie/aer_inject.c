@@ -12,8 +12,6 @@
  *     Huang Ying <ying.huang@intel.com>
  */
 
-#define dev_fmt(fmt) "aer_inject: " fmt
-
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/irq.h>
@@ -334,14 +332,14 @@ static int aer_inject(struct aer_error_inj *einj)
 		return -ENODEV;
 	rpdev = pcie_find_root_port(dev);
 	if (!rpdev) {
-		pci_err(dev, "Root port not found\n");
+		pci_err(dev, "aer_inject: Root port not found\n");
 		ret = -ENODEV;
 		goto out_put;
 	}
 
 	pos_cap_err = dev->aer_cap;
 	if (!pos_cap_err) {
-		pci_err(dev, "Device doesn't support AER\n");
+		pci_err(dev, "aer_inject: Device doesn't support AER\n");
 		ret = -EPROTONOSUPPORT;
 		goto out_put;
 	}
@@ -352,7 +350,7 @@ static int aer_inject(struct aer_error_inj *einj)
 
 	rp_pos_cap_err = rpdev->aer_cap;
 	if (!rp_pos_cap_err) {
-		pci_err(rpdev, "Root port doesn't support AER\n");
+		pci_err(rpdev, "aer_inject: Root port doesn't support AER\n");
 		ret = -EPROTONOSUPPORT;
 		goto out_put;
 	}
@@ -400,14 +398,14 @@ static int aer_inject(struct aer_error_inj *einj)
 	if (!aer_mask_override && einj->cor_status &&
 	    !(einj->cor_status & ~cor_mask)) {
 		ret = -EINVAL;
-		pci_warn(dev, "The correctable error(s) is masked by device\n");
+		pci_warn(dev, "aer_inject: The correctable error(s) is masked by device\n");
 		spin_unlock_irqrestore(&inject_lock, flags);
 		goto out_put;
 	}
 	if (!aer_mask_override && einj->uncor_status &&
 	    !(einj->uncor_status & ~uncor_mask)) {
 		ret = -EINVAL;
-		pci_warn(dev, "The uncorrectable error(s) is masked by device\n");
+		pci_warn(dev, "aer_inject: The uncorrectable error(s) is masked by device\n");
 		spin_unlock_irqrestore(&inject_lock, flags);
 		goto out_put;
 	}
@@ -462,17 +460,19 @@ static int aer_inject(struct aer_error_inj *einj)
 	if (device) {
 		edev = to_pcie_device(device);
 		if (!get_service_data(edev)) {
-			pci_warn(edev->port, "AER service is not initialized\n");
+			dev_warn(&edev->device,
+				 "aer_inject: AER service is not initialized\n");
 			ret = -EPROTONOSUPPORT;
 			goto out_put;
 		}
-		pci_info(edev->port, "Injecting errors %08x/%08x into device %s\n",
+		dev_info(&edev->device,
+			 "aer_inject: Injecting errors %08x/%08x into device %s\n",
 			 einj->cor_status, einj->uncor_status, pci_name(dev));
 		local_irq_disable();
 		generic_handle_irq(edev->irq);
 		local_irq_enable();
 	} else {
-		pci_err(rpdev, "AER device not found\n");
+		pci_err(rpdev, "aer_inject: AER device not found\n");
 		ret = -ENODEV;
 	}
 out_put:

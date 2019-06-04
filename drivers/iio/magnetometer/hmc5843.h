@@ -43,7 +43,6 @@ struct hmc5843_data {
 	struct mutex lock;
 	struct regmap *regmap;
 	const struct hmc5843_chip_info *variant;
-	struct iio_mount_matrix orientation;
 	__be16 buffer[8];
 };
 

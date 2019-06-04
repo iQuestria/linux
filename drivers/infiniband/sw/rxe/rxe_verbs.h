@@ -61,18 +61,18 @@ static inline int psn_compare(u32 psn_a, u32 psn_b)
 }
 
 struct rxe_ucontext {
-	struct ib_ucontext ibuc;
 	struct rxe_pool_entry	pelem;
+	struct ib_ucontext	ibuc;
 };
 
 struct rxe_pd {
-	struct ib_pd            ibpd;
 	struct rxe_pool_entry	pelem;
+	struct ib_pd		ibpd;
 };
 
 struct rxe_ah {
-	struct ib_ah		ibah;
 	struct rxe_pool_entry	pelem;
+	struct ib_ah		ibah;
 	struct rxe_pd		*pd;
 	struct rxe_av		av;
 };
@@ -120,8 +120,8 @@ struct rxe_rq {
 };
 
 struct rxe_srq {
-	struct ib_srq		ibsrq;
 	struct rxe_pool_entry	pelem;
+	struct ib_srq		ibsrq;
 	struct rxe_pd		*pd;
 	struct rxe_rq		rq;
 	u32			srq_num;
@@ -385,6 +385,7 @@ struct rxe_dev {
 	struct ib_device_attr	attr;
 	int			max_ucontext;
 	int			max_inline_data;
+	struct kref		ref_cnt;
 	struct mutex	usdev_lock;
 
 	struct net_device	*ndev;
@@ -408,15 +409,16 @@ struct rxe_dev {
 	spinlock_t		mmap_offset_lock; /* guard mmap_offset */
 	int			mmap_offset;
 
-	atomic64_t		stats_counters[RXE_NUM_OF_COUNTERS];
+	u64			stats_counters[RXE_NUM_OF_COUNTERS];
 
 	struct rxe_port		port;
+	struct list_head	list;
 	struct crypto_shash	*tfm;
 };
 
-static inline void rxe_counter_inc(struct rxe_dev *rxe, enum rxe_counters index)
+static inline void rxe_counter_inc(struct rxe_dev *rxe, enum rxe_counters cnt)
 {
-	atomic64_inc(&rxe->stats_counters[index]);
+	rxe->stats_counters[cnt]++;
 }
 
 static inline struct rxe_dev *to_rdev(struct ib_device *dev)
@@ -464,7 +466,8 @@ static inline struct rxe_mem *to_rmw(struct ib_mw *mw)
 	return mw ? container_of(mw, struct rxe_mem, ibmw) : NULL;
 }
 
-int rxe_register_device(struct rxe_dev *rxe, const char *ibdev_name);
+int rxe_register_device(struct rxe_dev *rxe);
+int rxe_unregister_device(struct rxe_dev *rxe);
 
 void rxe_mc_cleanup(struct rxe_pool_entry *arg);
 

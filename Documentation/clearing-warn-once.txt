@@ -1,7 +1,5 @@
-Clearing WARN_ONCE
-------------------
 
-WARN_ONCE / WARN_ON_ONCE / printk_once only emit a message once.
+WARN_ONCE / WARN_ON_ONCE only print a warning once.
 
 echo 1 > /sys/kernel/debug/clear_warn_once
 

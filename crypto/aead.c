@@ -1,10 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * AEAD: Authenticated Encryption with Associated Data
  *
  * This file provides API support for AEAD algorithms.
  *
  * Copyright (c) 2007-2015 Herbert Xu <herbert@gondor.apana.org.au>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
  */
 
 #include <crypto/internal/geniv.h>
@@ -56,10 +61,8 @@ int crypto_aead_setkey(struct crypto_aead *tfm,
 	else
 		err = crypto_aead_alg(tfm)->setkey(tfm, key, keylen);
 
-	if (unlikely(err)) {
-		crypto_aead_set_flags(tfm, CRYPTO_TFM_NEED_KEY);
+	if (err)
 		return err;
-	}
 
 	crypto_aead_clear_flags(tfm, CRYPTO_TFM_NEED_KEY);
 	return 0;
@@ -116,16 +119,20 @@ static int crypto_aead_report(struct sk_buff *skb, struct crypto_alg *alg)
 	struct crypto_report_aead raead;
 	struct aead_alg *aead = container_of(alg, struct aead_alg, base);
 
-	memset(&raead, 0, sizeof(raead));
-
-	strscpy(raead.type, "aead", sizeof(raead.type));
-	strscpy(raead.geniv, "<none>", sizeof(raead.geniv));
+	strncpy(raead.type, "aead", sizeof(raead.type));
+	strncpy(raead.geniv, "<none>", sizeof(raead.geniv));
 
 	raead.blocksize = alg->cra_blocksize;
 	raead.maxauthsize = aead->maxauthsize;
 	raead.ivsize = aead->ivsize;
 
-	return nla_put(skb, CRYPTOCFGA_REPORT_AEAD, sizeof(raead), &raead);
+	if (nla_put(skb, CRYPTOCFGA_REPORT_AEAD,
+		    sizeof(struct crypto_report_aead), &raead))
+		goto nla_put_failure;
+	return 0;
+
+nla_put_failure:
+	return -EMSGSIZE;
 }
 #else
 static int crypto_aead_report(struct sk_buff *skb, struct crypto_alg *alg)

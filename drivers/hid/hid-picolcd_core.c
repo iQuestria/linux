@@ -28,7 +28,6 @@
 #include <linux/completion.h>
 #include <linux/uaccess.h>
 #include <linux/module.h>
-#include <linux/string.h>
 
 #include "hid-picolcd.h"
 
@@ -276,20 +275,27 @@ static ssize_t picolcd_operation_mode_store(struct device *dev,
 {
 	struct picolcd_data *data = dev_get_drvdata(dev);
 	struct hid_report *report = NULL;
+	size_t cnt = count;
 	int timeout = data->opmode_delay;
 	unsigned long flags;
 
-	if (sysfs_streq(buf, "lcd")) {
+	if (cnt >= 3 && strncmp("lcd", buf, 3) == 0) {
 		if (data->status & PICOLCD_BOOTLOADER)
 			report = picolcd_out_report(REPORT_EXIT_FLASHER, data->hdev);
-	} else if (sysfs_streq(buf, "bootloader")) {
+		buf += 3;
+		cnt -= 3;
+	} else if (cnt >= 10 && strncmp("bootloader", buf, 10) == 0) {
 		if (!(data->status & PICOLCD_BOOTLOADER))
 			report = picolcd_out_report(REPORT_EXIT_KEYBOARD, data->hdev);
-	} else {
-		return -EINVAL;
+		buf += 10;
+		cnt -= 10;
 	}
-
 	if (!report || report->maxfield != 1)
+		return -EINVAL;
+
+	while (cnt > 0 && (buf[cnt-1] == '\n' || buf[cnt-1] == '\r'))
+		cnt--;
+	if (cnt != 0)
 		return -EINVAL;
 
 	spin_lock_irqsave(&data->lock, flags);

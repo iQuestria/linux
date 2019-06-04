@@ -60,7 +60,7 @@ static int eeh_result_priority(enum pci_ers_result result)
 	}
 };
 
-static const char *pci_ers_result_name(enum pci_ers_result result)
+const char *pci_ers_result_name(enum pci_ers_result result)
 {
 	switch (result) {
 	case PCI_ERS_RESULT_NONE:
@@ -510,11 +510,22 @@ static void *eeh_rmv_device(struct eeh_dev *edev, void *userdata)
 	 * support EEH. So we just care about PCI devices for
 	 * simplicity here.
 	 */
-	if (!eeh_edev_actionable(edev) ||
-	    (dev->hdr_type == PCI_HEADER_TYPE_BRIDGE))
+	if (!dev || (dev->hdr_type == PCI_HEADER_TYPE_BRIDGE))
+		return NULL;
+
+	/*
+	 * We rely on count-based pcibios_release_device() to
+	 * detach permanently offlined PEs. Unfortunately, that's
+	 * not reliable enough. We might have the permanently
+	 * offlined PEs attached, but we needn't take care of
+	 * them and their child devices.
+	 */
+	if (eeh_dev_removed(edev))
 		return NULL;
 
 	if (rmv_data) {
+		if (eeh_pe_passed(edev->pe))
+			return NULL;
 		driver = eeh_pcid_get(dev);
 		if (driver) {
 			if (driver->err_handler &&
@@ -528,8 +539,8 @@ static void *eeh_rmv_device(struct eeh_dev *edev, void *userdata)
 	}
 
 	/* Remove it from PCI subsystem */
-	pr_info("EEH: Removing %s without EEH sensitive driver\n",
-		pci_name(dev));
+	pr_debug("EEH: Removing %s without EEH sensitive driver\n",
+		 pci_name(dev));
 	edev->mode |= EEH_DEV_DISCONNECTED;
 	if (rmv_data)
 		rmv_data->removed_dev_count++;
@@ -580,22 +591,34 @@ static void *eeh_pe_detach_dev(struct eeh_pe *pe, void *userdata)
  * PE reset (for 3 times), we try to clear the frozen state
  * for 3 times as well.
  */
-static int eeh_clear_pe_frozen_state(struct eeh_pe *root, bool include_passed)
+static void *__eeh_clear_pe_frozen_state(struct eeh_pe *pe, void *flag)
 {
-	struct eeh_pe *pe;
-	int i;
+	bool clear_sw_state = *(bool *)flag;
+	int i, rc = 1;
 
-	eeh_for_each_pe(root, pe) {
-		if (include_passed || !eeh_pe_passed(pe)) {
-			for (i = 0; i < 3; i++)
-				if (!eeh_unfreeze_pe(pe))
-					break;
-			if (i >= 3)
-				return -EIO;
-		}
+	for (i = 0; rc && i < 3; i++)
+		rc = eeh_unfreeze_pe(pe, clear_sw_state);
+
+	/* Stop immediately on any errors */
+	if (rc) {
+		pr_warn("%s: Failure %d unfreezing PHB#%x-PE#%x\n",
+			__func__, rc, pe->phb->global_number, pe->addr);
+		return (void *)pe;
 	}
-	eeh_pe_state_clear(root, EEH_PE_ISOLATED, include_passed);
-	return 0;
+
+	return NULL;
+}
+
+static int eeh_clear_pe_frozen_state(struct eeh_pe *pe,
+				     bool clear_sw_state)
+{
+	void *rc;
+
+	rc = eeh_pe_traverse(pe, __eeh_clear_pe_frozen_state, &clear_sw_state);
+	if (!rc)
+		eeh_pe_state_clear(pe, EEH_PE_ISOLATED);
+
+	return rc ? -EIO : 0;
 }
 
 int eeh_pe_reset_and_recover(struct eeh_pe *pe)
@@ -613,16 +636,16 @@ int eeh_pe_reset_and_recover(struct eeh_pe *pe)
 	eeh_pe_dev_traverse(pe, eeh_dev_save_state, NULL);
 
 	/* Issue reset */
-	ret = eeh_pe_reset_full(pe, true);
+	ret = eeh_pe_reset_full(pe);
 	if (ret) {
-		eeh_pe_state_clear(pe, EEH_PE_RECOVERING, true);
+		eeh_pe_state_clear(pe, EEH_PE_RECOVERING);
 		return ret;
 	}
 
 	/* Unfreeze the PE */
 	ret = eeh_clear_pe_frozen_state(pe, true);
 	if (ret) {
-		eeh_pe_state_clear(pe, EEH_PE_RECOVERING, true);
+		eeh_pe_state_clear(pe, EEH_PE_RECOVERING);
 		return ret;
 	}
 
@@ -630,7 +653,7 @@ int eeh_pe_reset_and_recover(struct eeh_pe *pe)
 	eeh_pe_dev_traverse(pe, eeh_dev_restore_state, NULL);
 
 	/* Clear recovery mode */
-	eeh_pe_state_clear(pe, EEH_PE_RECOVERING, true);
+	eeh_pe_state_clear(pe, EEH_PE_RECOVERING);
 
 	return 0;
 }
@@ -653,11 +676,6 @@ static int eeh_reset_device(struct eeh_pe *pe, struct pci_bus *bus,
 	time64_t tstamp;
 	int cnt, rc;
 	struct eeh_dev *edev;
-	struct eeh_pe *tmp_pe;
-	bool any_passed = false;
-
-	eeh_for_each_pe(pe, tmp_pe)
-		any_passed |= eeh_pe_passed(tmp_pe);
 
 	/* pcibios will clear the counter; save the value */
 	cnt = pe->freeze_count;
@@ -670,7 +688,7 @@ static int eeh_reset_device(struct eeh_pe *pe, struct pci_bus *bus,
 	 * into pci_hp_add_devices().
 	 */
 	eeh_pe_state_mark(pe, EEH_PE_KEEP);
-	if (any_passed || driver_eeh_aware || (pe->type & EEH_PE_VF)) {
+	if (driver_eeh_aware || (pe->type & EEH_PE_VF)) {
 		eeh_pe_dev_traverse(pe, eeh_rmv_device, rmv_data);
 	} else {
 		pci_lock_rescan_remove();
@@ -687,7 +705,7 @@ static int eeh_reset_device(struct eeh_pe *pe, struct pci_bus *bus,
 	 * config accesses. So we prefer to block them. However, controlled
 	 * PCI config accesses initiated from EEH itself are allowed.
 	 */
-	rc = eeh_pe_reset_full(pe, false);
+	rc = eeh_pe_reset_full(pe);
 	if (rc)
 		return rc;
 
@@ -726,11 +744,11 @@ static int eeh_reset_device(struct eeh_pe *pe, struct pci_bus *bus,
 			eeh_add_virt_device(edev);
 		} else {
 			if (!driver_eeh_aware)
-				eeh_pe_state_clear(pe, EEH_PE_PRI_BUS, true);
+				eeh_pe_state_clear(pe, EEH_PE_PRI_BUS);
 			pci_hp_add_devices(bus);
 		}
 	}
-	eeh_pe_state_clear(pe, EEH_PE_KEEP, true);
+	eeh_pe_state_clear(pe, EEH_PE_KEEP);
 
 	pe->tstamp = tstamp;
 	pe->freeze_count = cnt;
@@ -882,7 +900,7 @@ void eeh_handle_normal_event(struct eeh_pe *pe)
 			 * is still in frozen state. Clear it before
 			 * resuming the PE.
 			 */
-			eeh_pe_state_clear(pe, EEH_PE_ISOLATED, true);
+			eeh_pe_state_clear(pe, EEH_PE_ISOLATED);
 			result = PCI_ERS_RESULT_RECOVERED;
 		}
 	}
@@ -959,7 +977,7 @@ void eeh_handle_normal_event(struct eeh_pe *pe)
 			eeh_pe_dev_traverse(pe, eeh_rmv_device, NULL);
 			eeh_pe_dev_mode_mark(pe, EEH_DEV_REMOVED);
 		} else {
-			eeh_pe_state_clear(pe, EEH_PE_PRI_BUS, true);
+			eeh_pe_state_clear(pe, EEH_PE_PRI_BUS);
 			eeh_pe_dev_mode_mark(pe, EEH_DEV_REMOVED);
 
 			pci_lock_rescan_remove();
@@ -969,7 +987,7 @@ void eeh_handle_normal_event(struct eeh_pe *pe)
 			return;
 		}
 	}
-	eeh_pe_state_clear(pe, EEH_PE_RECOVERING, true);
+	eeh_pe_state_clear(pe, EEH_PE_RECOVERING);
 }
 
 /**
@@ -1051,7 +1069,7 @@ void eeh_handle_special_event(void)
 					continue;
 
 				/* Notify all devices to be down */
-				eeh_pe_state_clear(pe, EEH_PE_PRI_BUS, true);
+				eeh_pe_state_clear(pe, EEH_PE_PRI_BUS);
 				eeh_set_channel_state(pe, pci_channel_io_perm_failure);
 				eeh_pe_report(
 					"error_detected(permanent failure)", pe,

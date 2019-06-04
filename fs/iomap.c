@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2010 Red Hat, Inc.
  * Copyright (c) 2016-2018 Christoph Hellwig.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  */
 #include <linux/module.h>
 #include <linux/compiler.h>
@@ -108,12 +116,6 @@ iomap_page_create(struct inode *inode, struct page *page)
 	atomic_set(&iop->read_count, 0);
 	atomic_set(&iop->write_count, 0);
 	bitmap_zero(iop->uptodate, PAGE_SIZE / SECTOR_SIZE);
-
-	/*
-	 * migrate_page_move_mapping() assumes that pages with private data have
-	 * their count elevated by 1.
-	 */
-	get_page(page);
 	set_page_private(page, (unsigned long)iop);
 	SetPagePrivate(page);
 	return iop;
@@ -130,7 +132,6 @@ iomap_page_release(struct page *page)
 	WARN_ON_ONCE(atomic_read(&iop->write_count));
 	ClearPagePrivate(page);
 	set_page_private(page, 0);
-	put_page(page);
 	kfree(iop);
 }
 
@@ -241,26 +242,6 @@ iomap_read_page_end_io(struct bio_vec *bvec, int error)
 }
 
 static void
-iomap_read_end_io(struct bio *bio)
-{
-	int error = blk_status_to_errno(bio->bi_status);
-	struct bio_vec *bvec;
-	struct bvec_iter_all iter_all;
-
-	bio_for_each_segment_all(bvec, bio, iter_all)
-		iomap_read_page_end_io(bvec, error);
-	bio_put(bio);
-}
-
-struct iomap_readpage_ctx {
-	struct page		*cur_page;
-	bool			cur_page_in_bio;
-	bool			is_readahead;
-	struct bio		*bio;
-	struct list_head	*pages;
-};
-
-static void
 iomap_read_inline_data(struct inode *inode, struct page *page,
 		struct iomap *iomap)
 {
@@ -279,6 +260,26 @@ iomap_read_inline_data(struct inode *inode, struct page *page,
 	kunmap_atomic(addr);
 	SetPageUptodate(page);
 }
+
+static void
+iomap_read_end_io(struct bio *bio)
+{
+	int error = blk_status_to_errno(bio->bi_status);
+	struct bio_vec *bvec;
+	int i;
+
+	bio_for_each_segment_all(bvec, bio, i)
+		iomap_read_page_end_io(bvec, error);
+	bio_put(bio);
+}
+
+struct iomap_readpage_ctx {
+	struct page		*cur_page;
+	bool			cur_page_in_bio;
+	bool			is_readahead;
+	struct bio		*bio;
+	struct list_head	*pages;
+};
 
 static loff_t
 iomap_readpage_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
@@ -316,7 +317,7 @@ iomap_readpage_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
 	 */
 	sector = iomap_sector(iomap, pos);
 	if (ctx->bio && bio_end_sector(ctx->bio) == sector) {
-		if (__bio_try_merge_page(ctx->bio, page, plen, poff, true))
+		if (__bio_try_merge_page(ctx->bio, page, plen, poff))
 			goto done;
 		is_contig = true;
 	}
@@ -347,7 +348,7 @@ iomap_readpage_actor(struct inode *inode, loff_t pos, loff_t length, void *data,
 		ctx->bio->bi_end_io = iomap_read_end_io;
 	}
 
-	bio_add_page(ctx->bio, page, plen, poff);
+	__bio_add_page(ctx->bio, page, plen, poff);
 done:
 	/*
 	 * Move the caller beyond our range so that it keeps making progress.
@@ -491,28 +492,15 @@ done:
 }
 EXPORT_SYMBOL_GPL(iomap_readpages);
 
-/*
- * iomap_is_partially_uptodate checks whether blocks within a page are
- * uptodate or not.
- *
- * Returns true if all blocks which correspond to a file portion
- * we want to read within the page are uptodate.
- */
 int
 iomap_is_partially_uptodate(struct page *page, unsigned long from,
 		unsigned long count)
 {
 	struct iomap_page *iop = to_iomap_page(page);
 	struct inode *inode = page->mapping->host;
-	unsigned len, first, last;
+	unsigned first = from >> inode->i_blkbits;
+	unsigned last = (from + count - 1) >> inode->i_blkbits;
 	unsigned i;
-
-	/* Limit range to one page */
-	len = min_t(unsigned, PAGE_SIZE - from, count);
-
-	/* First and last blocks in range within page */
-	first = from >> inode->i_blkbits;
-	last = (from + len - 1) >> inode->i_blkbits;
 
 	if (iop) {
 		for (i = first; i <= last; i++)
@@ -562,16 +550,14 @@ iomap_migrate_page(struct address_space *mapping, struct page *newpage,
 {
 	int ret;
 
-	ret = migrate_page_move_mapping(mapping, newpage, page, mode, 0);
+	ret = migrate_page_move_mapping(mapping, newpage, page, NULL, mode, 0);
 	if (ret != MIGRATEPAGE_SUCCESS)
 		return ret;
 
 	if (page_has_private(page)) {
 		ClearPagePrivate(page);
-		get_page(newpage);
 		set_page_private(newpage, page_private(page));
 		set_page_private(page, 0);
-		put_page(page);
 		SetPagePrivate(newpage);
 	}
 
@@ -656,7 +642,6 @@ static int
 iomap_write_begin(struct inode *inode, loff_t pos, unsigned len, unsigned flags,
 		struct page **pagep, struct iomap *iomap)
 {
-	const struct iomap_page_ops *page_ops = iomap->page_ops;
 	pgoff_t index = pos >> PAGE_SHIFT;
 	struct page *page;
 	int status = 0;
@@ -666,17 +651,9 @@ iomap_write_begin(struct inode *inode, loff_t pos, unsigned len, unsigned flags,
 	if (fatal_signal_pending(current))
 		return -EINTR;
 
-	if (page_ops && page_ops->page_prepare) {
-		status = page_ops->page_prepare(inode, pos, len, iomap);
-		if (status)
-			return status;
-	}
-
 	page = grab_cache_page_write_begin(inode->i_mapping, index, flags);
-	if (!page) {
-		status = -ENOMEM;
-		goto out_no_page;
-	}
+	if (!page)
+		return -ENOMEM;
 
 	if (iomap->type == IOMAP_INLINE)
 		iomap_read_inline_data(inode, page, iomap);
@@ -684,21 +661,15 @@ iomap_write_begin(struct inode *inode, loff_t pos, unsigned len, unsigned flags,
 		status = __block_write_begin_int(page, pos, len, NULL, iomap);
 	else
 		status = __iomap_write_begin(inode, pos, len, page, iomap);
+	if (unlikely(status)) {
+		unlock_page(page);
+		put_page(page);
+		page = NULL;
 
-	if (unlikely(status))
-		goto out_unlock;
+		iomap_write_failed(inode, pos, len);
+	}
 
 	*pagep = page;
-	return 0;
-
-out_unlock:
-	unlock_page(page);
-	put_page(page);
-	iomap_write_failed(inode, pos, len);
-
-out_no_page:
-	if (page_ops && page_ops->page_done)
-		page_ops->page_done(inode, pos, 0, NULL, iomap);
 	return status;
 }
 
@@ -744,11 +715,13 @@ __iomap_write_end(struct inode *inode, loff_t pos, unsigned len,
 	 * uptodate page as a zero-length write, and force the caller to redo
 	 * the whole thing.
 	 */
-	if (unlikely(copied < len && !PageUptodate(page)))
-		return 0;
-	iomap_set_range_uptodate(page, offset_in_page(pos), len);
-	iomap_set_page_dirty(page);
-	return copied;
+	if (unlikely(copied < len && !PageUptodate(page))) {
+		copied = 0;
+	} else {
+		iomap_set_range_uptodate(page, offset_in_page(pos), len);
+		iomap_set_page_dirty(page);
+	}
+	return __generic_write_end(inode, pos, copied, page);
 }
 
 static int
@@ -765,6 +738,7 @@ iomap_write_end_inline(struct inode *inode, struct page *page,
 	kunmap_atomic(addr);
 
 	mark_inode_dirty(inode);
+	__generic_write_end(inode, pos, copied, page);
 	return copied;
 }
 
@@ -772,22 +746,19 @@ static int
 iomap_write_end(struct inode *inode, loff_t pos, unsigned len,
 		unsigned copied, struct page *page, struct iomap *iomap)
 {
-	const struct iomap_page_ops *page_ops = iomap->page_ops;
 	int ret;
 
 	if (iomap->type == IOMAP_INLINE) {
 		ret = iomap_write_end_inline(inode, page, iomap, pos, copied);
 	} else if (iomap->flags & IOMAP_F_BUFFER_HEAD) {
-		ret = block_write_end(NULL, inode->i_mapping, pos, len, copied,
-				page, NULL);
+		ret = generic_write_end(NULL, inode->i_mapping, pos, len,
+				copied, page, NULL);
 	} else {
 		ret = __iomap_write_end(inode, pos, len, copied, page, iomap);
 	}
 
-	__generic_write_end(inode, pos, ret, page);
-	if (page_ops && page_ops->page_done)
-		page_ops->page_done(inode, pos, copied, page, iomap);
-	put_page(page);
+	if (iomap->page_done)
+		iomap->page_done(inode, pos, copied, page, iomap);
 
 	if (ret < len)
 		iomap_write_failed(inode, pos, len);
@@ -1470,28 +1441,6 @@ struct iomap_dio {
 	};
 };
 
-int iomap_dio_iopoll(struct kiocb *kiocb, bool spin)
-{
-	struct request_queue *q = READ_ONCE(kiocb->private);
-
-	if (!q)
-		return 0;
-	return blk_poll(q, READ_ONCE(kiocb->ki_cookie), spin);
-}
-EXPORT_SYMBOL_GPL(iomap_dio_iopoll);
-
-static void iomap_dio_submit_bio(struct iomap_dio *dio, struct iomap *iomap,
-		struct bio *bio)
-{
-	atomic_inc(&dio->ref);
-
-	if (dio->iocb->ki_flags & IOCB_HIPRI)
-		bio_set_polled(bio, dio->iocb);
-
-	dio->submit.last_queue = bdev_get_queue(iomap->bdev);
-	dio->submit.cookie = submit_bio(bio);
-}
-
 static ssize_t iomap_dio_complete(struct iomap_dio *dio)
 {
 	struct kiocb *iocb = dio->iocb;
@@ -1581,7 +1530,7 @@ static void iomap_dio_bio_end_io(struct bio *bio)
 		if (dio->wait_for_completion) {
 			struct task_struct *waiter = dio->submit.waiter;
 			WRITE_ONCE(dio->submit.waiter, NULL);
-			blk_wake_io_task(waiter);
+			wake_up_process(waiter);
 		} else if (dio->flags & IOMAP_DIO_WRITE) {
 			struct inode *inode = file_inode(dio->iocb->ki_filp);
 
@@ -1595,23 +1544,20 @@ static void iomap_dio_bio_end_io(struct bio *bio)
 	if (should_dirty) {
 		bio_check_pages_dirty(bio);
 	} else {
-		if (!bio_flagged(bio, BIO_NO_PAGE_REF)) {
-			struct bvec_iter_all iter_all;
-			struct bio_vec *bvec;
+		struct bio_vec *bvec;
+		int i;
 
-			bio_for_each_segment_all(bvec, bio, iter_all)
-				put_page(bvec->bv_page);
-		}
+		bio_for_each_segment_all(bvec, bio, i)
+			put_page(bvec->bv_page);
 		bio_put(bio);
 	}
 }
 
-static void
+static blk_qc_t
 iomap_dio_zero(struct iomap_dio *dio, struct iomap *iomap, loff_t pos,
 		unsigned len)
 {
 	struct page *page = ZERO_PAGE(0);
-	int flags = REQ_SYNC | REQ_IDLE;
 	struct bio *bio;
 
 	bio = bio_alloc(GFP_KERNEL, 1);
@@ -1622,8 +1568,10 @@ iomap_dio_zero(struct iomap_dio *dio, struct iomap *iomap, loff_t pos,
 
 	get_page(page);
 	__bio_add_page(bio, page, len, 0);
-	bio_set_op_attrs(bio, REQ_OP_WRITE, flags);
-	iomap_dio_submit_bio(dio, iomap, bio);
+	bio_set_op_attrs(bio, REQ_OP_WRITE, REQ_SYNC | REQ_IDLE);
+
+	atomic_inc(&dio->ref);
+	return submit_bio(bio);
 }
 
 static loff_t
@@ -1733,7 +1681,11 @@ iomap_dio_bio_actor(struct inode *inode, loff_t pos, loff_t length,
 		copied += n;
 
 		nr_pages = iov_iter_npages(&iter, BIO_MAX_PAGES);
-		iomap_dio_submit_bio(dio, iomap, bio);
+
+		atomic_inc(&dio->ref);
+
+		dio->submit.last_queue = bdev_get_queue(iomap->bdev);
+		dio->submit.cookie = submit_bio(bio);
 	} while (nr_pages);
 
 	/*
@@ -1832,7 +1784,6 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	loff_t pos = iocb->ki_pos, start = pos;
 	loff_t end = iocb->ki_pos + count - 1, ret = 0;
 	unsigned int flags = IOMAP_DIRECT;
-	bool wait_for_completion = is_sync_kiocb(iocb);
 	struct blk_plug plug;
 	struct iomap_dio *dio;
 
@@ -1852,6 +1803,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	dio->end_io = end_io;
 	dio->error = 0;
 	dio->flags = 0;
+	dio->wait_for_completion = is_sync_kiocb(iocb);
 
 	dio->submit.iter = iter;
 	dio->submit.waiter = current;
@@ -1906,7 +1858,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		dio_warn_stale_pagecache(iocb->ki_filp);
 	ret = 0;
 
-	if (iov_iter_rw(iter) == WRITE && !wait_for_completion &&
+	if (iov_iter_rw(iter) == WRITE && !dio->wait_for_completion &&
 	    !inode->i_sb->s_dio_done_wq) {
 		ret = sb_init_dio_done_wq(inode->i_sb);
 		if (ret < 0)
@@ -1922,9 +1874,18 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		if (ret <= 0) {
 			/* magic error code to fall back to buffered I/O */
 			if (ret == -ENOTBLK) {
-				wait_for_completion = true;
+				dio->wait_for_completion = true;
 				ret = 0;
 			}
+
+			/*
+			 * Splicing to pipes can fail on a full pipe. We have to
+			 * swallow this to make it look like a short IO
+			 * otherwise the higher splice layers will completely
+			 * mishandle the error and stop moving data.
+			 */
+			if (ret == -EFAULT)
+				ret = 0;
 			break;
 		}
 		pos += ret;
@@ -1944,27 +1905,8 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	if (dio->flags & IOMAP_DIO_WRITE_FUA)
 		dio->flags &= ~IOMAP_DIO_NEED_SYNC;
 
-	WRITE_ONCE(iocb->ki_cookie, dio->submit.cookie);
-	WRITE_ONCE(iocb->private, dio->submit.last_queue);
-
-	/*
-	 * We are about to drop our additional submission reference, which
-	 * might be the last reference to the dio.  There are three three
-	 * different ways we can progress here:
-	 *
-	 *  (a) If this is the last reference we will always complete and free
-	 *	the dio ourselves.
-	 *  (b) If this is not the last reference, and we serve an asynchronous
-	 *	iocb, we must never touch the dio after the decrement, the
-	 *	I/O completion handler will complete and free it.
-	 *  (c) If this is not the last reference, but we serve a synchronous
-	 *	iocb, the I/O completion handler will wake us up on the drop
-	 *	of the final reference, and we will complete and free it here
-	 *	after we got woken by the I/O completion handler.
-	 */
-	dio->wait_for_completion = wait_for_completion;
 	if (!atomic_dec_and_test(&dio->ref)) {
-		if (!wait_for_completion)
+		if (!dio->wait_for_completion)
 			return -EIOCBQUEUED;
 
 		for (;;) {
@@ -1975,13 +1917,15 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 			if (!(iocb->ki_flags & IOCB_HIPRI) ||
 			    !dio->submit.last_queue ||
 			    !blk_poll(dio->submit.last_queue,
-					 dio->submit.cookie, true))
+					 dio->submit.cookie))
 				io_schedule();
 		}
 		__set_current_state(TASK_RUNNING);
 	}
 
-	return iomap_dio_complete(dio);
+	ret = iomap_dio_complete(dio);
+
+	return ret;
 
 out_free_dio:
 	kfree(dio);

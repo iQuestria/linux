@@ -33,7 +33,6 @@
 */
 
 #include <linux/errno.h>
-#include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>

@@ -248,8 +248,6 @@ int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
 	 */
 	if (ring->funcs->type == AMDGPU_RING_TYPE_KIQ)
 		sched_hw_submission = max(sched_hw_submission, 256);
-	else if (ring == &adev->sdma.instance[0].page)
-		sched_hw_submission = 256;
 
 	if (ring->adev == NULL) {
 		if (adev->num_rings >= AMDGPU_MAX_RINGS)
@@ -340,7 +338,7 @@ int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
  */
 void amdgpu_ring_fini(struct amdgpu_ring *ring)
 {
-	ring->sched.ready = false;
+	ring->ready = false;
 
 	/* Not to finish a ring which is not initialized */
 	if (!(ring->adev) || !(ring->adev->rings[ring->idx]))
@@ -399,7 +397,7 @@ bool amdgpu_ring_soft_recovery(struct amdgpu_ring *ring, unsigned int vmid,
 {
 	ktime_t deadline = ktime_add_us(ktime_get(), 10000);
 
-	if (!ring->funcs->soft_recovery || !fence)
+	if (!ring->funcs->soft_recovery)
 		return false;
 
 	atomic_inc(&ring->adev->gpu_reset_counter);
@@ -501,30 +499,4 @@ static void amdgpu_debugfs_ring_fini(struct amdgpu_ring *ring)
 #if defined(CONFIG_DEBUG_FS)
 	debugfs_remove(ring->ent);
 #endif
-}
-
-/**
- * amdgpu_ring_test_helper - tests ring and set sched readiness status
- *
- * @ring: ring to try the recovery on
- *
- * Tests ring and set sched readiness status
- *
- * Returns 0 on success, error on failure.
- */
-int amdgpu_ring_test_helper(struct amdgpu_ring *ring)
-{
-	struct amdgpu_device *adev = ring->adev;
-	int r;
-
-	r = amdgpu_ring_test_ring(ring);
-	if (r)
-		DRM_DEV_ERROR(adev->dev, "ring %s test failed (%d)\n",
-			      ring->name, r);
-	else
-		DRM_DEV_DEBUG(adev->dev, "ring test on %s succeeded\n",
-			      ring->name);
-
-	ring->sched.ready = !r;
-	return r;
 }

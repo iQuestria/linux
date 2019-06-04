@@ -20,7 +20,7 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
-	tdmif_a: audio-controller-0 {
+	tdmif_a: audio-controller@0 {
 		compatible = "amlogic,axg-tdm-iface";
 		#sound-dai-cells = <0>;
 		sound-name-prefix = "TDM_A";
@@ -31,7 +31,7 @@
 		status = "disabled";
 	};
 
-	tdmif_b: audio-controller-1 {
+	tdmif_b: audio-controller@1 {
 		compatible = "amlogic,axg-tdm-iface";
 		#sound-dai-cells = <0>;
 		sound-name-prefix = "TDM_B";
@@ -42,7 +42,7 @@
 		status = "disabled";
 	};
 
-	tdmif_c: audio-controller-2 {
+	tdmif_c: audio-controller@2 {
 		compatible = "amlogic,axg-tdm-iface";
 		#sound-dai-cells = <0>;
 		sound-name-prefix = "TDM_C";
@@ -51,6 +51,13 @@
 			 <&clkc_audio AUD_CLKID_MST_C_LRCLK>;
 		clock-names = "mclk", "sclk", "lrclk";
 		status = "disabled";
+	};
+
+	ao_alt_xtal: ao_alt_xtal-clk {
+		compatible = "fixed-clock";
+		clock-frequency = <32000000>;
+		clock-output-names = "ao_alt_xtal";
+		#clock-cells = <0>;
 	};
 
 	arm-pmu {
@@ -68,55 +75,39 @@
 
 		cpu0: cpu@0 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a53", "arm,armv8";
 			reg = <0x0 0x0>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
-			clocks = <&scpi_dvfs 0>;
 		};
 
 		cpu1: cpu@1 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a53", "arm,armv8";
 			reg = <0x0 0x1>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
-			clocks = <&scpi_dvfs 0>;
 		};
 
 		cpu2: cpu@2 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a53", "arm,armv8";
 			reg = <0x0 0x2>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
-			clocks = <&scpi_dvfs 0>;
 		};
 
 		cpu3: cpu@3 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53";
+			compatible = "arm,cortex-a53", "arm,armv8";
 			reg = <0x0 0x3>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
-			clocks = <&scpi_dvfs 0>;
 		};
 
 		l2: l2-cache0 {
 			compatible = "cache";
 		};
-	};
-
-	sm: secure-monitor {
-		compatible = "amlogic,meson-gxbb-sm";
-	};
-
-	efuse: efuse {
-		compatible = "amlogic,meson-gxbb-efuse";
-		clocks = <&clkc CLKID_EFUSE>;
-		#address-cells = <1>;
-		#size-cells = <1>;
-		read-only;
 	};
 
 	psci {
@@ -142,28 +133,6 @@
 		};
 	};
 
-	scpi {
-		compatible = "arm,scpi-pre-1.0";
-		mboxes = <&mailbox 1 &mailbox 2>;
-		shmem = <&cpu_scp_lpri &cpu_scp_hpri>;
-
-		scpi_clocks: clocks {
-			compatible = "arm,scpi-clocks";
-
-			scpi_dvfs: clock-controller {
-				compatible = "arm,scpi-dvfs-clocks";
-				#clock-cells = <1>;
-				clock-indices = <0>;
-				clock-output-names = "vcpu";
-			};
-		};
-
-		scpi_sensors: sensors {
-			compatible = "amlogic,meson-gxbb-scpi-sensors";
-			#thermal-sensor-cells = <1>;
-		};
-	};
-
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
@@ -174,7 +143,7 @@
 			compatible = "amlogic,meson-axg-dwmac", "snps,dwmac";
 			reg = <0x0 0xff3f0000 0x0 0x10000
 			       0x0 0xff634540 0x0 0x8>;
-			interrupts = <GIC_SPI 8 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <GIC_SPI 8 IRQ_TYPE_EDGE_RISING>;
 			interrupt-names = "macirq";
 			clocks = <&clkc CLKID_ETH>,
 				 <&clkc CLKID_FCLK_DIV2>,
@@ -231,7 +200,6 @@
 						groups = "i2c0_sck",
 							 "i2c0_sda";
 						function = "i2c0";
-						bias-disable;
 					};
 				};
 
@@ -240,7 +208,6 @@
 						groups = "i2c1_sck_x",
 							 "i2c1_sda_x";
 						function = "i2c1";
-						bias-disable;
 					};
 				};
 
@@ -249,7 +216,6 @@
 						groups = "i2c1_sck_z",
 							 "i2c1_sda_z";
 						function = "i2c1";
-						bias-disable;
 					};
 				};
 
@@ -258,7 +224,6 @@
 						groups = "i2c2_sck_a",
 							 "i2c2_sda_a";
 						function = "i2c2";
-						bias-disable;
 					};
 				};
 
@@ -267,7 +232,6 @@
 						groups = "i2c2_sck_x",
 							 "i2c2_sda_x";
 						function = "i2c2";
-						bias-disable;
 					};
 				};
 
@@ -276,7 +240,6 @@
 						groups = "i2c3_sda_a6",
 							 "i2c3_sck_a7";
 						function = "i2c3";
-						bias-disable;
 					};
 				};
 
@@ -285,7 +248,6 @@
 						groups = "i2c3_sda_a12",
 							 "i2c3_sck_a13";
 						function = "i2c3";
-						bias-disable;
 					};
 				};
 
@@ -294,7 +256,6 @@
 						groups = "i2c3_sda_a19",
 							 "i2c3_sck_a20";
 						function = "i2c3";
-						bias-disable;
 					};
 				};
 
@@ -312,7 +273,6 @@
 							 "emmc_cmd",
 							 "emmc_ds";
 						function = "emmc";
-						bias-disable;
 					};
 				};
 
@@ -320,6 +280,9 @@
 					mux {
 						groups = "BOOT_8";
 						function = "gpio_periphs";
+					};
+					cfg-pull-down {
+						pins = "BOOT_8";
 						bias-pull-down;
 					};
 				};
@@ -341,7 +304,6 @@
 							 "eth_txd2_rgmii",
 							 "eth_txd3_rgmii";
 						function = "eth";
-						bias-disable;
 					};
 				};
 
@@ -362,7 +324,6 @@
 							 "eth_txd2_rgmii",
 							 "eth_txd3_rgmii";
 						function = "eth";
-						bias-disable;
 					};
 				};
 
@@ -378,7 +339,6 @@
 							 "eth_txd0_x",
 							 "eth_txd1_x";
 						function = "eth";
-						bias-disable;
 					};
 				};
 
@@ -394,7 +354,6 @@
 							 "eth_txd0_y",
 							 "eth_txd1_y";
 						function = "eth";
-						bias-disable;
 					};
 				};
 
@@ -402,7 +361,6 @@
 					mux {
 						groups = "mclk_b";
 						function = "mclk_b";
-						bias-disable;
 					};
 				};
 
@@ -410,7 +368,6 @@
 					mux {
 						groups = "mclk_c";
 						function = "mclk_c";
-						bias-disable;
 					};
 				};
 
@@ -418,7 +375,6 @@
 					mux {
 						groups = "pdm_dclk_a14";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -426,7 +382,6 @@
 					mux {
 						groups = "pdm_dclk_a19";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -434,7 +389,6 @@
 					mux {
 						groups = "pdm_din0";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -442,7 +396,6 @@
 					mux {
 						groups = "pdm_din1";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -450,7 +403,6 @@
 					mux {
 						groups = "pdm_din2";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -458,7 +410,6 @@
 					mux {
 						groups = "pdm_din3";
 						function = "pdm";
-						bias-disable;
 					};
 				};
 
@@ -466,7 +417,6 @@
 					mux {
 						groups = "pwm_a_a";
 						function = "pwm_a";
-						bias-disable;
 					};
 				};
 
@@ -474,7 +424,6 @@
 					mux {
 						groups = "pwm_a_x18";
 						function = "pwm_a";
-						bias-disable;
 					};
 				};
 
@@ -482,7 +431,6 @@
 					mux {
 						groups = "pwm_a_x20";
 						function = "pwm_a";
-						bias-disable;
 					};
 				};
 
@@ -490,7 +438,6 @@
 					mux {
 						groups = "pwm_a_z";
 						function = "pwm_a";
-						bias-disable;
 					};
 				};
 
@@ -498,7 +445,6 @@
 					mux {
 						groups = "pwm_b_a";
 						function = "pwm_b";
-						bias-disable;
 					};
 				};
 
@@ -506,7 +452,6 @@
 					mux {
 						groups = "pwm_b_x";
 						function = "pwm_b";
-						bias-disable;
 					};
 				};
 
@@ -514,7 +459,6 @@
 					mux {
 						groups = "pwm_b_z";
 						function = "pwm_b";
-						bias-disable;
 					};
 				};
 
@@ -522,7 +466,6 @@
 					mux {
 						groups = "pwm_c_a";
 						function = "pwm_c";
-						bias-disable;
 					};
 				};
 
@@ -530,7 +473,6 @@
 					mux {
 						groups = "pwm_c_x10";
 						function = "pwm_c";
-						bias-disable;
 					};
 				};
 
@@ -538,7 +480,6 @@
 					mux {
 						groups = "pwm_c_x17";
 						function = "pwm_c";
-						bias-disable;
 					};
 				};
 
@@ -546,7 +487,6 @@
 					mux {
 						groups = "pwm_d_x11";
 						function = "pwm_d";
-						bias-disable;
 					};
 				};
 
@@ -554,7 +494,6 @@
 					mux {
 						groups = "pwm_d_x16";
 						function = "pwm_d";
-						bias-disable;
 					};
 				};
 
@@ -567,7 +506,6 @@
 							 "sdio_cmd",
 							 "sdio_clk";
 						function = "sdio";
-						bias-disable;
 					};
 				};
 
@@ -575,6 +513,9 @@
 					mux {
 						groups = "GPIOX_4";
 						function = "gpio_periphs";
+					};
+					cfg-pull-down {
+						pins = "GPIOX_4";
 						bias-pull-down;
 					};
 				};
@@ -583,7 +524,6 @@
 					mux {
 						groups = "spdif_in_z";
 						function = "spdif_in";
-						bias-disable;
 					};
 				};
 
@@ -591,7 +531,6 @@
 					mux {
 						groups = "spdif_in_a1";
 						function = "spdif_in";
-						bias-disable;
 					};
 				};
 
@@ -599,7 +538,6 @@
 					mux {
 						groups = "spdif_in_a7";
 						function = "spdif_in";
-						bias-disable;
 					};
 				};
 
@@ -607,7 +545,6 @@
 					mux {
 						groups = "spdif_in_a19";
 						function = "spdif_in";
-						bias-disable;
 					};
 				};
 
@@ -615,7 +552,6 @@
 					mux {
 						groups = "spdif_in_a20";
 						function = "spdif_in";
-						bias-disable;
 					};
 				};
 
@@ -623,7 +559,6 @@
 					mux {
 						groups = "spdif_out_a1";
 						function = "spdif_out";
-						bias-disable;
 					};
 				};
 
@@ -631,7 +566,6 @@
 					mux {
 						groups = "spdif_out_a11";
 						function = "spdif_out";
-						bias-disable;
 					};
 				};
 
@@ -639,7 +573,6 @@
 					mux {
 						groups = "spdif_out_a19";
 						function = "spdif_out";
-						bias-disable;
 					};
 				};
 
@@ -647,7 +580,6 @@
 					mux {
 						groups = "spdif_out_a20";
 						function = "spdif_out";
-						bias-disable;
 					};
 				};
 
@@ -655,7 +587,6 @@
 					mux {
 						groups = "spdif_out_z";
 						function = "spdif_out";
-						bias-disable;
 					};
 				};
 
@@ -665,7 +596,6 @@
 							 "spi0_mosi",
 							 "spi0_clk";
 						function = "spi0";
-						bias-disable;
 					};
 				};
 
@@ -673,7 +603,6 @@
 					mux {
 						groups = "spi0_ss0";
 						function = "spi0";
-						bias-disable;
 					};
 				};
 
@@ -681,7 +610,6 @@
 					mux {
 						groups = "spi0_ss1";
 						function = "spi0";
-						bias-disable;
 					};
 				};
 
@@ -689,7 +617,6 @@
 					mux {
 						groups = "spi0_ss2";
 						function = "spi0";
-						bias-disable;
 					};
 				};
 
@@ -699,7 +626,6 @@
 							 "spi1_mosi_a",
 							 "spi1_clk_a";
 						function = "spi1";
-						bias-disable;
 					};
 				};
 
@@ -707,7 +633,6 @@
 					mux {
 						groups = "spi1_ss0_a";
 						function = "spi1";
-						bias-disable;
 					};
 				};
 
@@ -715,7 +640,6 @@
 					mux {
 						groups = "spi1_ss1";
 						function = "spi1";
-						bias-disable;
 					};
 				};
 
@@ -725,7 +649,6 @@
 							 "spi1_mosi_x",
 							 "spi1_clk_x";
 						function = "spi1";
-						bias-disable;
 					};
 				};
 
@@ -733,7 +656,6 @@
 					mux {
 						groups = "spi1_ss0_x";
 						function = "spi1";
-						bias-disable;
 					};
 				};
 
@@ -741,7 +663,6 @@
 					mux {
 						groups = "tdma_din0";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -749,7 +670,6 @@
 					mux {
 						groups = "tdma_dout0_x14";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -757,7 +677,6 @@
 					mux {
 						groups = "tdma_dout0_x15";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -765,7 +684,6 @@
 					mux {
 						groups = "tdma_dout1";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -773,7 +691,6 @@
 					mux {
 						groups = "tdma_din1";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -781,7 +698,6 @@
 					mux {
 						groups = "tdma_fs";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -789,7 +705,6 @@
 					mux {
 						groups = "tdma_fs_slv";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -797,7 +712,6 @@
 					mux {
 						groups = "tdma_sclk";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -805,7 +719,6 @@
 					mux {
 						groups = "tdma_sclk_slv";
 						function = "tdma";
-						bias-disable;
 					};
 				};
 
@@ -813,7 +726,6 @@
 					mux {
 						groups = "tdmb_din0";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -821,7 +733,6 @@
 					mux {
 						groups = "tdmb_din1";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -829,7 +740,6 @@
 					mux {
 						groups = "tdmb_din2";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -837,7 +747,6 @@
 					mux {
 						groups = "tdmb_din3";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -845,7 +754,6 @@
 					mux {
 						groups = "tdmb_dout0";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -853,7 +761,6 @@
 					mux {
 						groups = "tdmb_dout1";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -861,7 +768,6 @@
 					mux {
 						groups = "tdmb_dout2";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -869,7 +775,6 @@
 					mux {
 						groups = "tdmb_dout3";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -877,7 +782,6 @@
 					mux {
 						groups = "tdmb_fs";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -885,7 +789,6 @@
 					mux {
 						groups = "tdmb_fs_slv";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -893,7 +796,6 @@
 					mux {
 						groups = "tdmb_sclk";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -901,7 +803,6 @@
 					mux {
 						groups = "tdmb_sclk_slv";
 						function = "tdmb";
-						bias-disable;
 					};
 				};
 
@@ -909,7 +810,6 @@
 					mux {
 						groups = "tdmc_fs";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -917,7 +817,6 @@
 					mux {
 						groups = "tdmc_fs_slv";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -925,7 +824,6 @@
 					mux {
 						groups = "tdmc_sclk";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -933,7 +831,6 @@
 					mux {
 						groups = "tdmc_sclk_slv";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -941,7 +838,6 @@
 					mux {
 						groups = "tdmc_din0";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -949,7 +845,6 @@
 					mux {
 						groups = "tdmc_din1";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -957,7 +852,6 @@
 					mux {
 						groups = "tdmc_din2";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -965,7 +859,6 @@
 					mux {
 						groups = "tdmc_din3";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -973,7 +866,6 @@
 					mux {
 						groups = "tdmc_dout0";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -981,7 +873,6 @@
 					mux {
 						groups = "tdmc_dout1";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -989,7 +880,6 @@
 					mux {
 						groups = "tdmc_dout2";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -997,7 +887,6 @@
 					mux {
 						groups = "tdmc_dout3";
 						function = "tdmc";
-						bias-disable;
 					};
 				};
 
@@ -1006,7 +895,6 @@
 						groups = "uart_tx_a",
 							 "uart_rx_a";
 						function = "uart_a";
-						bias-disable;
 					};
 				};
 
@@ -1015,7 +903,6 @@
 						groups = "uart_cts_a",
 							 "uart_rts_a";
 						function = "uart_a";
-						bias-disable;
 					};
 				};
 
@@ -1024,7 +911,6 @@
 						groups = "uart_tx_b_x",
 							 "uart_rx_b_x";
 						function = "uart_b";
-						bias-disable;
 					};
 				};
 
@@ -1033,7 +919,6 @@
 						groups = "uart_cts_b_x",
 							 "uart_rts_b_x";
 						function = "uart_b";
-						bias-disable;
 					};
 				};
 
@@ -1042,7 +927,6 @@
 						groups = "uart_tx_b_z",
 							 "uart_rx_b_z";
 						function = "uart_b";
-						bias-disable;
 					};
 				};
 
@@ -1051,7 +935,6 @@
 						groups = "uart_cts_b_z",
 							 "uart_rts_b_z";
 						function = "uart_b";
-						bias-disable;
 					};
 				};
 
@@ -1060,7 +943,6 @@
 						groups = "uart_ao_tx_b_z",
 							 "uart_ao_rx_b_z";
 						function = "uart_ao_b_z";
-						bias-disable;
 					};
 				};
 
@@ -1069,7 +951,6 @@
 						groups = "uart_ao_cts_b_z",
 							 "uart_ao_rts_b_z";
 						function = "uart_ao_b_z";
-						bias-disable;
 					};
 				};
 			};
@@ -1090,15 +971,13 @@
 				clkc: clock-controller {
 					compatible = "amlogic,axg-clkc";
 					#clock-cells = <1>;
-					clocks = <&xtal>;
-					clock-names = "xtal";
 				};
 			};
 		};
 
-		mailbox: mailbox@ff63c404 {
+		mailbox: mailbox@ff63dc00 {
 			compatible = "amlogic,meson-gx-mhu", "amlogic,meson-gxbb-mhu";
-			reg = <0 0xff63c404 0 0x4c>;
+			reg = <0 0xff63dc00 0 0x400>;
 			interrupts = <GIC_SPI 208 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 209 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 210 IRQ_TYPE_EDGE_RISING>;
@@ -1268,18 +1147,6 @@
 				status = "disabled";
 			};
 
-			spdifin: audio-controller@400 {
-				compatible = "amlogic,axg-spdifin";
-				reg = <0x0 0x400 0x0 0x30>;
-				#sound-dai-cells = <0>;
-				sound-name-prefix = "SPDIFIN";
-				interrupts = <GIC_SPI 87 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&clkc_audio AUD_CLKID_SPDIFIN>,
-					 <&clkc_audio AUD_CLKID_SPDIFIN_CLK>;
-				clock-names = "pclk", "refclk";
-				status = "disabled";
-			};
-
 			spdifout: audio-controller@480 {
 				compatible = "amlogic,axg-spdifout";
 				reg = <0x0 0x480 0x0 0x50>;
@@ -1349,8 +1216,6 @@
 					compatible = "amlogic,meson-axg-aoclkc";
 					#clock-cells = <1>;
 					#reset-cells = <1>;
-					clocks = <&xtal>, <&clkc CLKID_CLK81>;
-					clock-names = "xtal", "mpeg-clk";
 				};
 			};
 
@@ -1374,7 +1239,6 @@
 					mux {
 						groups = "i2c_ao_sck_4";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1382,7 +1246,6 @@
 					mux {
 						groups = "i2c_ao_sck_8";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1390,7 +1253,6 @@
 					mux {
 						groups = "i2c_ao_sck_10";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1398,7 +1260,6 @@
 					mux {
 						groups = "i2c_ao_sda_5";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1406,7 +1267,6 @@
 					mux {
 						groups = "i2c_ao_sda_9";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1414,7 +1274,6 @@
 					mux {
 						groups = "i2c_ao_sda_11";
 						function = "i2c_ao";
-						bias-disable;
 					};
 				};
 
@@ -1422,7 +1281,6 @@
 					mux {
 						groups = "remote_input_ao";
 						function = "remote_input_ao";
-						bias-disable;
 					};
 				};
 
@@ -1431,7 +1289,6 @@
 						groups = "uart_ao_tx_a",
 							 "uart_ao_rx_a";
 						function = "uart_ao_a";
-						bias-disable;
 					};
 				};
 
@@ -1440,7 +1297,6 @@
 						groups = "uart_ao_cts_a",
 							 "uart_ao_rts_a";
 						function = "uart_ao_a";
-						bias-disable;
 					};
 				};
 
@@ -1449,7 +1305,6 @@
 						groups = "uart_ao_tx_b",
 							 "uart_ao_rx_b";
 						function = "uart_ao_b";
-						bias-disable;
 					};
 				};
 
@@ -1458,7 +1313,6 @@
 						groups = "uart_ao_cts_b",
 							 "uart_ao_rts_b";
 						function = "uart_ao_b";
-						bias-disable;
 					};
 				};
 			};
@@ -1560,18 +1414,12 @@
 			};
 
 			gpio_intc: interrupt-controller@f080 {
-				compatible = "amlogic,meson-axg-gpio-intc",
-					     "amlogic,meson-gpio-intc";
+				compatible = "amlogic,meson-gpio-intc";
 				reg = <0x0 0xf080 0x0 0x10>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
 				amlogic,channel-interrupts = <64 65 66 67 68 69 70 71>;
-			};
-
-			watchdog@f0d0 {
-				compatible = "amlogic,meson-gxbb-wdt";
-				reg = <0x0 0xf0d0 0x0 0x10>;
-				clocks = <&xtal>;
+				status = "disabled";
 			};
 
 			pwm_ab: pwm@1b000 {
@@ -1608,11 +1456,6 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 				status = "disabled";
-			};
-
-			clk_msr: clock-measure@18000 {
-				compatible = "amlogic,meson-axg-clk-measure";
-				reg = <0x0 0x18000 0x0 0x10>;
 			};
 
 			i2c3: i2c@1c000 {
@@ -1713,12 +1556,12 @@
 			#size-cells = <1>;
 			ranges = <0 0x0 0xfffc0000 0x20000>;
 
-			cpu_scp_lpri: scp-shmem@13000 {
+			cpu_scp_lpri: scp-shmem@0 {
 				compatible = "amlogic,meson-axg-scp-shmem";
 				reg = <0x13000 0x400>;
 			};
 
-			cpu_scp_hpri: scp-shmem@13400 {
+			cpu_scp_hpri: scp-shmem@200 {
 				compatible = "amlogic,meson-axg-scp-shmem";
 				reg = <0x13400 0x400>;
 			};

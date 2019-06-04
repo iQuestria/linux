@@ -1,7 +1,6 @@
-# SPDX-License-Identifier: GPL-2.0
 menuconfig MOST
         tristate "MOST support"
-	depends on HAS_DMA && CONFIGFS_FS
+	depends on HAS_DMA
         default n
         ---help---
 	  Say Y here if you want to enable MOST support.

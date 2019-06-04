@@ -37,11 +37,11 @@
 	 * the kernel thread pointer.  If we came from the kernel, sscratch
 	 * will contain 0, and we should continue on the current TP.
 	 */
-	csrrw tp, CSR_SSCRATCH, tp
+	csrrw tp, sscratch, tp
 	bnez tp, _save_context
 
 _restore_kernel_tpsp:
-	csrr tp, CSR_SSCRATCH
+	csrr tp, sscratch
 	REG_S sp, TASK_TI_KERNEL_SP(tp)
 _save_context:
 	REG_S sp, TASK_TI_USER_SP(tp)
@@ -87,11 +87,11 @@ _save_context:
 	li t0, SR_SUM | SR_FS
 
 	REG_L s0, TASK_TI_USER_SP(tp)
-	csrrc s1, CSR_SSTATUS, t0
-	csrr s2, CSR_SEPC
-	csrr s3, CSR_STVAL
-	csrr s4, CSR_SCAUSE
-	csrr s5, CSR_SSCRATCH
+	csrrc s1, sstatus, t0
+	csrr s2, sepc
+	csrr s3, sbadaddr
+	csrr s4, scause
+	csrr s5, sscratch
 	REG_S s0, PT_SP(sp)
 	REG_S s1, PT_SSTATUS(sp)
 	REG_S s2, PT_SEPC(sp)
@@ -107,8 +107,8 @@ _save_context:
 	.macro RESTORE_ALL
 	REG_L a0, PT_SSTATUS(sp)
 	REG_L a2, PT_SEPC(sp)
-	csrw CSR_SSTATUS, a0
-	csrw CSR_SEPC, a2
+	csrw sstatus, a0
+	csrw sepc, a2
 
 	REG_L x1,  PT_RA(sp)
 	REG_L x3,  PT_GP(sp)
@@ -144,10 +144,6 @@ _save_context:
 	REG_L x2,  PT_SP(sp)
 	.endm
 
-#if !IS_ENABLED(CONFIG_PREEMPT)
-.set resume_kernel, restore_all
-#endif
-
 ENTRY(handle_exception)
 	SAVE_ALL
 
@@ -155,7 +151,7 @@ ENTRY(handle_exception)
 	 * Set sscratch register to 0, so that if a recursive exception
 	 * occurs, the exception vector knows it came from the kernel
 	 */
-	csrw CSR_SSCRATCH, x0
+	csrw sscratch, x0
 
 	/* Load the global pointer */
 .option push
@@ -205,7 +201,7 @@ handle_syscall:
 	REG_S s2, PT_SEPC(sp)
 	/* Trace syscalls, but only if requested by the user. */
 	REG_L t0, TASK_TI_FLAGS(tp)
-	andi t0, t0, _TIF_SYSCALL_WORK
+	andi t0, t0, _TIF_SYSCALL_TRACE
 	bnez t0, handle_syscall_trace_enter
 check_syscall_nr:
 	/* Check to make sure we don't jump to a bogus syscall number. */
@@ -225,14 +221,14 @@ ret_from_syscall:
 	REG_S a0, PT_A0(sp)
 	/* Trace syscalls, but only if requested by the user. */
 	REG_L t0, TASK_TI_FLAGS(tp)
-	andi t0, t0, _TIF_SYSCALL_WORK
+	andi t0, t0, _TIF_SYSCALL_TRACE
 	bnez t0, handle_syscall_trace_exit
 
 ret_from_exception:
 	REG_L s0, PT_SSTATUS(sp)
 	csrc sstatus, SR_SIE
 	andi s0, s0, SR_SPP
-	bnez s0, resume_kernel
+	bnez s0, restore_all
 
 resume_userspace:
 	/* Interrupts must be disabled here so flags are checked atomically */
@@ -248,23 +244,11 @@ resume_userspace:
 	 * Save TP into sscratch, so we can find the kernel data structures
 	 * again.
 	 */
-	csrw CSR_SSCRATCH, tp
+	csrw sscratch, tp
 
 restore_all:
 	RESTORE_ALL
 	sret
-
-#if IS_ENABLED(CONFIG_PREEMPT)
-resume_kernel:
-	REG_L s0, TASK_TI_PREEMPT_COUNT(tp)
-	bnez s0, restore_all
-need_resched:
-	REG_L s0, TASK_TI_FLAGS(tp)
-	andi s0, s0, _TIF_NEED_RESCHED
-	beqz s0, restore_all
-	call preempt_schedule_irq
-	j need_resched
-#endif
 
 work_pending:
 	/* Enter slow path for supplementary processing */

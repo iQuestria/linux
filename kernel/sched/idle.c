@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Generic entry points for the idle threads and
  * implementation of the idle task scheduling class.

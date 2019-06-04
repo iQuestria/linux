@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2010 Juergen Beisert, Pengutronix
  *
@@ -7,6 +6,15 @@
  *
  * Copyright 2008-2009 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define DRIVER_NAME "mxsfb"
@@ -173,7 +181,6 @@ struct mxsfb_info {
 	const struct mxsfb_devdata *devdata;
 	u32 sync;
 	struct regulator *reg_lcd;
-	int pre_init;
 };
 
 #define mxsfb_is_v3(host) (host->devdata->ipversion == 3)
@@ -412,12 +419,6 @@ static int mxsfb_set_par(struct fb_info *fb_info)
 
 	fb_info->fix.line_length = line_size;
 
-	if (host->pre_init) {
-		mxsfb_enable_controller(fb_info);
-		host->pre_init = 0;
-		return 0;
-	}
-
 	/*
 	 * It seems, you can't re-program the controller if it is still running.
 	 * This may lead into shifted pictures (FIFO issue?).
@@ -622,6 +623,7 @@ static int mxsfb_restore_mode(struct fb_info *fb_info,
 			struct fb_videomode *vmode)
 {
 	struct mxsfb_info *host = fb_info->par;
+	unsigned line_count;
 	unsigned period;
 	unsigned long pa, fbsize;
 	int bits_per_pixel, ofs, ret = 0;
@@ -708,6 +710,7 @@ static int mxsfb_restore_mode(struct fb_info *fb_info,
 		writel(fb_info->fix.smem_start, host->base + host->devdata->next_buf);
 	}
 
+	line_count = fb_info->fix.smem_len / fb_info->fix.line_length;
 	fb_info->fix.ypanstep = 1;
 
 	clk_prepare_enable(host->clk);
@@ -928,10 +931,6 @@ static int mxsfb_probe(struct platform_device *pdev)
 	if (IS_ERR(host->reg_lcd))
 		host->reg_lcd = NULL;
 
-#if defined(CONFIG_FB_PRE_INIT_FB)
-	host->pre_init = 1;
-#endif
-
 	fb_info->pseudo_palette = devm_kcalloc(&pdev->dev, 16, sizeof(u32),
 					       GFP_KERNEL);
 	if (!fb_info->pseudo_palette) {
@@ -964,7 +963,6 @@ static int mxsfb_probe(struct platform_device *pdev)
 		mxsfb_enable_controller(fb_info);
 	}
 
-	host->pre_init = 0;
 	dev_info(&pdev->dev, "initialized\n");
 
 	return 0;

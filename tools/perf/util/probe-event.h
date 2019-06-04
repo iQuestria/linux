@@ -4,9 +4,8 @@
 
 #include <linux/compiler.h>
 #include <stdbool.h>
-
-struct intlist;
-struct nsinfo;
+#include "intlist.h"
+#include "namespaces.h"
 
 /* Probe related configurations */
 struct probe_conf {

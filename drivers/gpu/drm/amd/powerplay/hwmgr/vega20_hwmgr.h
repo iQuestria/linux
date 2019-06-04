@@ -42,8 +42,6 @@
 #define AVFS_CURVE 0
 #define OD8_HOTCURVE_TEMPERATURE 85
 
-#define VG20_CLOCK_MAX_DEFAULT 0xFFFF
-
 typedef uint32_t PP_Clock;
 
 enum {
@@ -80,7 +78,6 @@ enum {
 	GNLD_DS_MP1CLK,
 	GNLD_DS_MP0CLK,
 	GNLD_XGMI,
-	GNLD_ECC,
 
 	GNLD_FEATURES_MAX
 };
@@ -222,7 +219,6 @@ struct vega20_vbios_boot_state {
 	uint32_t    eclock;
 	uint32_t    dclock;
 	uint32_t    vclock;
-	uint32_t    fclock;
 };
 
 #define DPMTABLE_OD_UPDATE_SCLK     0x00000001
@@ -524,15 +520,6 @@ struct vega20_hwmgr {
 	/* ---- Gfxoff ---- */
 	bool                           gfxoff_allowed;
 	uint32_t                       counter_gfxoff;
-
-	unsigned long                  metrics_time;
-	SmuMetrics_t                   metrics_table;
-
-	bool                           pcie_parameters_override;
-	uint32_t                       pcie_gen_level1;
-	uint32_t                       pcie_width_level1;
-
-	bool                           is_custom_profile_set;
 };
 
 #define VEGA20_DPM2_NEAR_TDP_DEC                      10

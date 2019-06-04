@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Keystone GBE and XGBE subsystem code
  *
@@ -8,6 +7,15 @@
  *		Cyril Chemparathy <cyril@ti.com>
  *		Santosh Shilimkar <santosh.shilimkar@ti.com>
  *		Wingman Kwok <w-kwok2@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/io.h>
@@ -755,8 +763,6 @@ struct gbe_priv {
 
 	int                             cpts_registered;
 	struct cpts                     *cpts;
-	int				rx_ts_enabled;
-	int				tx_ts_enabled;
 };
 
 struct gbe_intf {
@@ -2558,7 +2564,7 @@ static int gbe_txtstamp_mark_pkt(struct gbe_intf *gbe_intf,
 	struct gbe_priv *gbe_dev = gbe_intf->gbe_dev;
 
 	if (!(skb_shinfo(p_info->skb)->tx_flags & SKBTX_HW_TSTAMP) ||
-	    !gbe_dev->tx_ts_enabled)
+	    !cpts_is_tx_enabled(gbe_dev->cpts))
 		return 0;
 
 	/* If phy has the txtstamp api, assume it will do it.
@@ -2592,9 +2598,7 @@ static int gbe_rxtstamp(struct gbe_intf *gbe_intf, struct netcp_packet *p_info)
 		return 0;
 	}
 
-	if (gbe_dev->rx_ts_enabled)
-		cpts_rx_timestamp(gbe_dev->cpts, p_info->skb);
-
+	cpts_rx_timestamp(gbe_dev->cpts, p_info->skb);
 	p_info->rxtstamp_complete = true;
 
 	return 0;
@@ -2610,8 +2614,10 @@ static int gbe_hwtstamp_get(struct gbe_intf *gbe_intf, struct ifreq *ifr)
 		return -EOPNOTSUPP;
 
 	cfg.flags = 0;
-	cfg.tx_type = gbe_dev->tx_ts_enabled ? HWTSTAMP_TX_ON : HWTSTAMP_TX_OFF;
-	cfg.rx_filter = gbe_dev->rx_ts_enabled;
+	cfg.tx_type = cpts_is_tx_enabled(cpts) ?
+		      HWTSTAMP_TX_ON : HWTSTAMP_TX_OFF;
+	cfg.rx_filter = (cpts_is_rx_enabled(cpts) ?
+			 cpts->rx_enable : HWTSTAMP_FILTER_NONE);
 
 	return copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg)) ? -EFAULT : 0;
 }
@@ -2622,8 +2628,8 @@ static void gbe_hwtstamp(struct gbe_intf *gbe_intf)
 	struct gbe_slave *slave = gbe_intf->slave;
 	u32 ts_en, seq_id, ctl;
 
-	if (!gbe_dev->rx_ts_enabled &&
-	    !gbe_dev->tx_ts_enabled) {
+	if (!cpts_is_rx_enabled(gbe_dev->cpts) &&
+	    !cpts_is_tx_enabled(gbe_dev->cpts)) {
 		writel(0, GBE_REG_ADDR(slave, port_regs, ts_ctl));
 		return;
 	}
@@ -2635,10 +2641,10 @@ static void gbe_hwtstamp(struct gbe_intf *gbe_intf)
 		(slave->ts_ctl.uni ?  TS_UNI_EN :
 			slave->ts_ctl.maddr_map << TS_CTL_MADDR_SHIFT);
 
-	if (gbe_dev->tx_ts_enabled)
+	if (cpts_is_tx_enabled(gbe_dev->cpts))
 		ts_en |= (TS_TX_ANX_ALL_EN | TS_TX_VLAN_LT1_EN);
 
-	if (gbe_dev->rx_ts_enabled)
+	if (cpts_is_rx_enabled(gbe_dev->cpts))
 		ts_en |= (TS_RX_ANX_ALL_EN | TS_RX_VLAN_LT1_EN);
 
 	writel(ts_en,  GBE_REG_ADDR(slave, port_regs, ts_ctl));
@@ -2664,10 +2670,10 @@ static int gbe_hwtstamp_set(struct gbe_intf *gbe_intf, struct ifreq *ifr)
 
 	switch (cfg.tx_type) {
 	case HWTSTAMP_TX_OFF:
-		gbe_dev->tx_ts_enabled = 0;
+		cpts_tx_enable(cpts, 0);
 		break;
 	case HWTSTAMP_TX_ON:
-		gbe_dev->tx_ts_enabled = 1;
+		cpts_tx_enable(cpts, 1);
 		break;
 	default:
 		return -ERANGE;
@@ -2675,12 +2681,12 @@ static int gbe_hwtstamp_set(struct gbe_intf *gbe_intf, struct ifreq *ifr)
 
 	switch (cfg.rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
-		gbe_dev->rx_ts_enabled = HWTSTAMP_FILTER_NONE;
+		cpts_rx_enable(cpts, 0);
 		break;
 	case HWTSTAMP_FILTER_PTP_V1_L4_EVENT:
 	case HWTSTAMP_FILTER_PTP_V1_L4_SYNC:
 	case HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ:
-		gbe_dev->rx_ts_enabled = HWTSTAMP_FILTER_PTP_V1_L4_EVENT;
+		cpts_rx_enable(cpts, HWTSTAMP_FILTER_PTP_V1_L4_EVENT);
 		cfg.rx_filter = HWTSTAMP_FILTER_PTP_V1_L4_EVENT;
 		break;
 	case HWTSTAMP_FILTER_PTP_V2_L4_EVENT:
@@ -2692,7 +2698,7 @@ static int gbe_hwtstamp_set(struct gbe_intf *gbe_intf, struct ifreq *ifr)
 	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
-		gbe_dev->rx_ts_enabled = HWTSTAMP_FILTER_PTP_V2_EVENT;
+		cpts_rx_enable(cpts, HWTSTAMP_FILTER_PTP_V2_EVENT);
 		cfg.rx_filter = HWTSTAMP_FILTER_PTP_V2_EVENT;
 		break;
 	default:
@@ -3615,7 +3621,7 @@ static int gbe_probe(struct netcp_device *netcp_device, struct device *dev,
 		return -EINVAL;
 	}
 
-	if (of_node_name_eq(node, "gbe")) {
+	if (!strcmp(node->name, "gbe")) {
 		ret = get_gbe_resource_version(gbe_dev, node);
 		if (ret)
 			return ret;
@@ -3629,7 +3635,7 @@ static int gbe_probe(struct netcp_device *netcp_device, struct device *dev,
 		else
 			ret = -ENODEV;
 
-	} else if (of_node_name_eq(node, "xgbe")) {
+	} else if (!strcmp(node->name, "xgbe")) {
 		ret = set_xgbe_ethss10_priv(gbe_dev, node);
 		if (ret)
 			return ret;
@@ -3649,16 +3655,12 @@ static int gbe_probe(struct netcp_device *netcp_device, struct device *dev,
 
 	ret = netcp_txpipe_init(&gbe_dev->tx_pipe, netcp_device,
 				gbe_dev->dma_chan_name, gbe_dev->tx_queue_id);
-	if (ret) {
-		of_node_put(interfaces);
+	if (ret)
 		return ret;
-	}
 
 	ret = netcp_txpipe_open(&gbe_dev->tx_pipe);
-	if (ret) {
-		of_node_put(interfaces);
+	if (ret)
 		return ret;
-	}
 
 	/* Create network interfaces */
 	INIT_LIST_HEAD(&gbe_dev->gbe_intf_head);

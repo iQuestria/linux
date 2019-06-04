@@ -161,7 +161,7 @@ static unsigned int sbsa_gwdt_get_timeleft(struct watchdog_device *wdd)
 		timeleft += readl(gwdt->control_base + SBSA_GWDT_WOR);
 
 	timeleft += lo_hi_readq(gwdt->control_base + SBSA_GWDT_WCV) -
-		    arch_timer_read_counter();
+		    arch_counter_get_cntvct();
 
 	do_div(timeleft, gwdt->clk);
 
@@ -231,6 +231,7 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct watchdog_device *wdd;
 	struct sbsa_gwdt *gwdt;
+	struct resource *res;
 	int ret, irq;
 	u32 status;
 
@@ -239,11 +240,13 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, gwdt);
 
-	cf_base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	cf_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(cf_base))
 		return PTR_ERR(cf_base);
 
-	rf_base = devm_platform_ioremap_resource(pdev, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	rf_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(rf_base))
 		return PTR_ERR(rf_base);
 
@@ -310,14 +313,29 @@ static int sbsa_gwdt_probe(struct platform_device *pdev)
 	 */
 	sbsa_gwdt_set_timeout(wdd, wdd->timeout);
 
-	watchdog_stop_on_reboot(wdd);
-	ret = devm_watchdog_register_device(dev, wdd);
+	ret = watchdog_register_device(wdd);
 	if (ret)
 		return ret;
 
 	dev_info(dev, "Initialized with %ds timeout @ %u Hz, action=%d.%s\n",
 		 wdd->timeout, gwdt->clk, action,
 		 status & SBSA_GWDT_WCS_EN ? " [enabled]" : "");
+
+	return 0;
+}
+
+static void sbsa_gwdt_shutdown(struct platform_device *pdev)
+{
+	struct sbsa_gwdt *gwdt = platform_get_drvdata(pdev);
+
+	sbsa_gwdt_stop(&gwdt->wdd);
+}
+
+static int sbsa_gwdt_remove(struct platform_device *pdev)
+{
+	struct sbsa_gwdt *gwdt = platform_get_drvdata(pdev);
+
+	watchdog_unregister_device(&gwdt->wdd);
 
 	return 0;
 }
@@ -367,6 +385,8 @@ static struct platform_driver sbsa_gwdt_driver = {
 		.of_match_table = sbsa_gwdt_of_match,
 	},
 	.probe = sbsa_gwdt_probe,
+	.remove = sbsa_gwdt_remove,
+	.shutdown = sbsa_gwdt_shutdown,
 	.id_table = sbsa_gwdt_pdev_match,
 };
 

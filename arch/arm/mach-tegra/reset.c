@@ -19,8 +19,6 @@
 #include <linux/init.h>
 #include <linux/io.h>
 
-#include <linux/firmware/trusted_foundations.h>
-
 #include <soc/tegra/fuse.h>
 
 #include <asm/cacheflush.h>
@@ -91,8 +89,6 @@ static void __init tegra_cpu_reset_handler_enable(void)
 
 void __init tegra_cpu_reset_handler_init(void)
 {
-	__tegra_cpu_reset_handler_data[TEGRA_RESET_TF_PRESENT] =
-		trusted_foundations_registered();
 
 #ifdef CONFIG_SMP
 	__tegra_cpu_reset_handler_data[TEGRA_RESET_MASK_PRESENT] =

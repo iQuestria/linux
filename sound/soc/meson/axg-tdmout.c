@@ -124,22 +124,21 @@ static void axg_tdmout_disable(struct regmap *map)
 	regmap_update_bits(map, TDMOUT_CTRL0, TDMOUT_CTRL0_ENABLE, 0);
 }
 
-static int axg_tdmout_prepare(struct regmap *map,
-			      const struct axg_tdm_formatter_hw *quirks,
-			      struct axg_tdm_stream *ts)
+static int axg_tdmout_prepare(struct regmap *map, struct axg_tdm_stream *ts)
 {
-	unsigned int val, skew = quirks->skew_offset;
+	unsigned int val = 0;
 
 	/* Set the stream skew */
 	switch (ts->iface->fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_I2S:
 	case SND_SOC_DAIFMT_DSP_A:
+		val |= TDMOUT_CTRL0_INIT_BITNUM(1);
 		break;
 
 	case SND_SOC_DAIFMT_LEFT_J:
 	case SND_SOC_DAIFMT_RIGHT_J:
 	case SND_SOC_DAIFMT_DSP_B:
-		skew += 1;
+		val |= TDMOUT_CTRL0_INIT_BITNUM(2);
 		break;
 
 	default:
@@ -147,8 +146,6 @@ static int axg_tdmout_prepare(struct regmap *map,
 		       ts->iface->fmt & SND_SOC_DAIFMT_FORMAT_MASK);
 		return -EINVAL;
 	}
-
-	val = TDMOUT_CTRL0_INIT_BITNUM(skew);
 
 	/* Set the slot width */
 	val |= TDMOUT_CTRL0_BITNUM(ts->iface->slot_width - 1);
@@ -237,29 +234,13 @@ static const struct axg_tdm_formatter_driver axg_tdmout_drv = {
 	.component_drv	= &axg_tdmout_component_drv,
 	.regmap_cfg	= &axg_tdmout_regmap_cfg,
 	.ops		= &axg_tdmout_ops,
-	.quirks		= &(const struct axg_tdm_formatter_hw) {
-		.invert_sclk = true,
-		.skew_offset = 1,
-	},
-};
-
-static const struct axg_tdm_formatter_driver g12a_tdmout_drv = {
-	.component_drv	= &axg_tdmout_component_drv,
-	.regmap_cfg	= &axg_tdmout_regmap_cfg,
-	.ops		= &axg_tdmout_ops,
-	.quirks		= &(const struct axg_tdm_formatter_hw) {
-		.invert_sclk = true,
-		.skew_offset = 2,
-	},
+	.invert_sclk	= true,
 };
 
 static const struct of_device_id axg_tdmout_of_match[] = {
 	{
 		.compatible = "amlogic,axg-tdmout",
 		.data = &axg_tdmout_drv,
-	}, {
-		.compatible = "amlogic,g12a-tdmout",
-		.data = &g12a_tdmout_drv,
 	}, {}
 };
 MODULE_DEVICE_TABLE(of, axg_tdmout_of_match);

@@ -591,7 +591,7 @@ unode_aux_to_inode_list(struct ulist_node *node)
 }
 
 /*
- * We maintain three separate rbtrees: one for direct refs, one for
+ * We maintain three seperate rbtrees: one for direct refs, one for
  * indirect refs which have a key, and one for indirect refs which do not
  * have a key. Each tree does merge on insertion.
  *
@@ -695,7 +695,7 @@ static int resolve_indirect_refs(struct btrfs_fs_info *fs_info,
 		}
 
 		/*
-		 * Now it's a direct ref, put it in the direct tree. We must
+		 * Now it's a direct ref, put it in the the direct tree. We must
 		 * do this last because the ref could be merged/freed here.
 		 */
 		prelim_ref_insert(fs_info, &preftrees->direct, ref, NULL);
@@ -712,7 +712,7 @@ out:
  * read tree blocks and add keys where required.
  */
 static int add_missing_keys(struct btrfs_fs_info *fs_info,
-			    struct preftrees *preftrees, bool lock)
+			    struct preftrees *preftrees)
 {
 	struct prelim_ref *ref;
 	struct extent_buffer *eb;
@@ -737,14 +737,12 @@ static int add_missing_keys(struct btrfs_fs_info *fs_info,
 			free_extent_buffer(eb);
 			return -EIO;
 		}
-		if (lock)
-			btrfs_tree_read_lock(eb);
+		btrfs_tree_read_lock(eb);
 		if (btrfs_header_level(eb) == 0)
 			btrfs_item_key_to_cpu(eb, &ref->key_for_search, 0);
 		else
 			btrfs_node_key_to_cpu(eb, &ref->key_for_search, 0);
-		if (lock)
-			btrfs_tree_read_unlock(eb);
+		btrfs_tree_read_unlock(eb);
 		free_extent_buffer(eb);
 		prelim_ref_insert(fs_info, &preftrees->indirect, ref, NULL);
 		cond_resched();
@@ -791,7 +789,7 @@ static int add_delayed_refs(const struct btrfs_fs_info *fs_info,
 			count = node->ref_mod * -1;
 			break;
 		default:
-			BUG();
+			BUG_ON(1);
 		}
 		*total_refs += count;
 		switch (node->type) {
@@ -1229,7 +1227,7 @@ again:
 
 	btrfs_release_path(path);
 
-	ret = add_missing_keys(fs_info, &preftrees, path->skip_locking == 0);
+	ret = add_missing_keys(fs_info, &preftrees);
 	if (ret)
 		goto out;
 
@@ -1290,15 +1288,11 @@ again:
 					ret = -EIO;
 					goto out;
 				}
-
-				if (!path->skip_locking) {
-					btrfs_tree_read_lock(eb);
-					btrfs_set_lock_blocking_read(eb);
-				}
+				btrfs_tree_read_lock(eb);
+				btrfs_set_lock_blocking_rw(eb, BTRFS_READ_LOCK);
 				ret = find_extent_in_eb(eb, bytenr,
 							*extent_item_pos, &eie, ignore_offset);
-				if (!path->skip_locking)
-					btrfs_tree_read_unlock_blocking(eb);
+				btrfs_tree_read_unlock_blocking(eb);
 				free_extent_buffer(eb);
 				if (ret < 0)
 					goto out;
@@ -1460,8 +1454,8 @@ int btrfs_find_all_roots(struct btrfs_trans_handle *trans,
  * callers (such as fiemap) which want to know whether the extent is
  * shared but do not need a ref count.
  *
- * This attempts to attach to the running transaction in order to account for
- * delayed refs, but continues on even when no running transaction exists.
+ * This attempts to allocate a transaction in order to account for
+ * delayed refs, but continues on even when the alloc fails.
  *
  * Return: 0 if extent is not shared, 1 if it is shared, < 0 on error.
  */
@@ -1484,16 +1478,13 @@ int btrfs_check_shared(struct btrfs_root *root, u64 inum, u64 bytenr)
 	tmp = ulist_alloc(GFP_NOFS);
 	roots = ulist_alloc(GFP_NOFS);
 	if (!tmp || !roots) {
-		ret = -ENOMEM;
-		goto out;
+		ulist_free(tmp);
+		ulist_free(roots);
+		return -ENOMEM;
 	}
 
-	trans = btrfs_attach_transaction(root);
+	trans = btrfs_join_transaction(root);
 	if (IS_ERR(trans)) {
-		if (PTR_ERR(trans) != -ENOENT && PTR_ERR(trans) != -EROFS) {
-			ret = PTR_ERR(trans);
-			goto out;
-		}
 		trans = NULL;
 		down_read(&fs_info->commit_root_sem);
 	} else {
@@ -1526,7 +1517,6 @@ int btrfs_check_shared(struct btrfs_root *root, u64 inum, u64 bytenr)
 	} else {
 		up_read(&fs_info->commit_root_sem);
 	}
-out:
 	ulist_free(tmp);
 	ulist_free(roots);
 	return ret;
@@ -1660,7 +1650,7 @@ char *btrfs_ref_to_path(struct btrfs_root *fs_root, struct btrfs_path *path,
 		/* make sure we can use eb after releasing the path */
 		if (eb != eb_in) {
 			if (!path->skip_locking)
-				btrfs_set_lock_blocking_read(eb);
+				btrfs_set_lock_blocking_rw(eb, BTRFS_READ_LOCK);
 			path->nodes[0] = NULL;
 			path->locks[0] = 0;
 		}
@@ -1751,7 +1741,7 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 		else if (flags & BTRFS_EXTENT_FLAG_DATA)
 			*flags_ret = BTRFS_EXTENT_FLAG_DATA;
 		else
-			BUG();
+			BUG_ON(1);
 		return 0;
 	}
 
@@ -1916,19 +1906,13 @@ int iterate_extent_inodes(struct btrfs_fs_info *fs_info,
 			extent_item_objectid);
 
 	if (!search_commit_root) {
-		trans = btrfs_attach_transaction(fs_info->extent_root);
-		if (IS_ERR(trans)) {
-			if (PTR_ERR(trans) != -ENOENT &&
-			    PTR_ERR(trans) != -EROFS)
-				return PTR_ERR(trans);
-			trans = NULL;
-		}
-	}
-
-	if (trans)
+		trans = btrfs_join_transaction(fs_info->extent_root);
+		if (IS_ERR(trans))
+			return PTR_ERR(trans);
 		btrfs_get_tree_mod_seq(fs_info, &tree_mod_seq_elem);
-	else
+	} else {
 		down_read(&fs_info->commit_root_sem);
+	}
 
 	ret = btrfs_find_all_leafs(trans, fs_info, extent_item_objectid,
 				   tree_mod_seq_elem.seq, &refs,
@@ -1961,7 +1945,7 @@ int iterate_extent_inodes(struct btrfs_fs_info *fs_info,
 
 	free_leaf_list(refs);
 out:
-	if (trans) {
+	if (!search_commit_root) {
 		btrfs_put_tree_mod_seq(fs_info, &tree_mod_seq_elem);
 		btrfs_end_transaction(trans);
 	} else {
@@ -2036,6 +2020,9 @@ static int iterate_inode_refs(u64 inum, struct btrfs_root *fs_root,
 			ret = -ENOMEM;
 			break;
 		}
+		extent_buffer_get(eb);
+		btrfs_tree_read_lock(eb);
+		btrfs_set_lock_blocking_rw(eb, BTRFS_READ_LOCK);
 		btrfs_release_path(path);
 
 		item = btrfs_item_nr(slot);
@@ -2055,6 +2042,7 @@ static int iterate_inode_refs(u64 inum, struct btrfs_root *fs_root,
 			len = sizeof(*iref) + name_len;
 			iref = (struct btrfs_inode_ref *)((char *)iref + len);
 		}
+		btrfs_tree_read_unlock_blocking(eb);
 		free_extent_buffer(eb);
 	}
 
@@ -2095,6 +2083,10 @@ static int iterate_inode_extrefs(u64 inum, struct btrfs_root *fs_root,
 			ret = -ENOMEM;
 			break;
 		}
+		extent_buffer_get(eb);
+
+		btrfs_tree_read_lock(eb);
+		btrfs_set_lock_blocking_rw(eb, BTRFS_READ_LOCK);
 		btrfs_release_path(path);
 
 		item_size = btrfs_item_size_nr(eb, slot);
@@ -2115,6 +2107,7 @@ static int iterate_inode_extrefs(u64 inum, struct btrfs_root *fs_root,
 			cur_offset += btrfs_inode_extref_name_len(eb, extref);
 			cur_offset += sizeof(*extref);
 		}
+		btrfs_tree_read_unlock_blocking(eb);
 		free_extent_buffer(eb);
 
 		offset++;

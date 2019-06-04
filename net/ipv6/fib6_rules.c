@@ -61,16 +61,16 @@ unsigned int fib6_rules_seq_read(struct net *net)
 }
 
 /* called with rcu lock held; no reference taken on fib6_info */
-int fib6_lookup(struct net *net, int oif, struct flowi6 *fl6,
-		struct fib6_result *res, int flags)
+struct fib6_info *fib6_lookup(struct net *net, int oif, struct flowi6 *fl6,
+			      int flags)
 {
+	struct fib6_info *f6i;
 	int err;
 
 	if (net->ipv6.fib6_has_custom_rules) {
 		struct fib_lookup_arg arg = {
 			.lookup_ptr = fib6_table_lookup,
 			.lookup_data = &oif,
-			.result = res,
 			.flags = FIB_LOOKUP_NOREF,
 		};
 
@@ -78,15 +78,19 @@ int fib6_lookup(struct net *net, int oif, struct flowi6 *fl6,
 
 		err = fib_rules_lookup(net->ipv6.fib6_rules_ops,
 				       flowi6_to_flowi(fl6), flags, &arg);
+		if (err)
+			return ERR_PTR(err);
+
+		f6i = arg.result ? : net->ipv6.fib6_null_entry;
 	} else {
-		err = fib6_table_lookup(net, net->ipv6.fib6_local_tbl, oif,
-					fl6, res, flags);
-		if (err || res->f6i == net->ipv6.fib6_null_entry)
-			err = fib6_table_lookup(net, net->ipv6.fib6_main_tbl,
-						oif, fl6, res, flags);
+		f6i = fib6_table_lookup(net, net->ipv6.fib6_local_tbl,
+					oif, fl6, flags);
+		if (!f6i || f6i == net->ipv6.fib6_null_entry)
+			f6i = fib6_table_lookup(net, net->ipv6.fib6_main_tbl,
+						oif, fl6, flags);
 	}
 
-	return err;
+	return f6i;
 }
 
 struct dst_entry *fib6_rule_lookup(struct net *net, struct flowi6 *fl6,
@@ -94,11 +98,9 @@ struct dst_entry *fib6_rule_lookup(struct net *net, struct flowi6 *fl6,
 				   int flags, pol_lookup_t lookup)
 {
 	if (net->ipv6.fib6_has_custom_rules) {
-		struct fib6_result res = {};
 		struct fib_lookup_arg arg = {
 			.lookup_ptr = lookup,
 			.lookup_data = skb,
-			.result = &res,
 			.flags = FIB_LOOKUP_NOREF,
 		};
 
@@ -108,8 +110,8 @@ struct dst_entry *fib6_rule_lookup(struct net *net, struct flowi6 *fl6,
 		fib_rules_lookup(net->ipv6.fib6_rules_ops,
 				 flowi6_to_flowi(fl6), flags, &arg);
 
-		if (res.rt6)
-			return &res.rt6->dst;
+		if (arg.result)
+			return arg.result;
 	} else {
 		struct rt6_info *rt;
 
@@ -155,11 +157,11 @@ static int fib6_rule_saddr(struct net *net, struct fib_rule *rule, int flags,
 static int fib6_rule_action_alt(struct fib_rule *rule, struct flowi *flp,
 				int flags, struct fib_lookup_arg *arg)
 {
-	struct fib6_result *res = arg->result;
 	struct flowi6 *flp6 = &flp->u.ip6;
 	struct net *net = rule->fr_net;
 	struct fib6_table *table;
-	int err, *oif;
+	struct fib6_info *f6i;
+	int err = -EAGAIN, *oif;
 	u32 tb_id;
 
 	switch (rule->action) {
@@ -180,12 +182,14 @@ static int fib6_rule_action_alt(struct fib_rule *rule, struct flowi *flp,
 		return -EAGAIN;
 
 	oif = (int *)arg->lookup_data;
-	err = fib6_table_lookup(net, table, *oif, flp6, res, flags);
-	if (!err && res->f6i != net->ipv6.fib6_null_entry)
+	f6i = fib6_table_lookup(net, table, *oif, flp6, flags);
+	if (f6i != net->ipv6.fib6_null_entry) {
 		err = fib6_rule_saddr(net, rule, flags, flp6,
-				      res->nh->fib_nh_dev);
-	else
-		err = -EAGAIN;
+				      fib6_info_nh_dev(f6i));
+
+		if (likely(!err))
+			arg->result = f6i;
+	}
 
 	return err;
 }
@@ -193,7 +197,6 @@ static int fib6_rule_action_alt(struct fib_rule *rule, struct flowi *flp,
 static int __fib6_rule_action(struct fib_rule *rule, struct flowi *flp,
 			      int flags, struct fib_lookup_arg *arg)
 {
-	struct fib6_result *res = arg->result;
 	struct flowi6 *flp6 = &flp->u.ip6;
 	struct rt6_info *rt = NULL;
 	struct fib6_table *table;
@@ -248,7 +251,7 @@ again:
 discard_pkt:
 	dst_hold(&rt->dst);
 out:
-	res->rt6 = rt;
+	arg->result = rt;
 	return err;
 }
 
@@ -263,12 +266,8 @@ static int fib6_rule_action(struct fib_rule *rule, struct flowi *flp,
 
 static bool fib6_rule_suppress(struct fib_rule *rule, struct fib_lookup_arg *arg)
 {
-	struct fib6_result *res = arg->result;
-	struct rt6_info *rt = res->rt6;
+	struct rt6_info *rt = (struct rt6_info *) arg->result;
 	struct net_device *dev = NULL;
-
-	if (!rt)
-		return false;
 
 	if (rt->rt6i_idev)
 		dev = rt->rt6i_idev->dev;

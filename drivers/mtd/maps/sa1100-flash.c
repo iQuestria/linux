@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Flash memory access on SA11x0 based devices
  *
@@ -21,7 +20,7 @@
 #include <linux/mtd/concat.h>
 
 #include <mach/hardware.h>
-#include <linux/sizes.h>
+#include <asm/sizes.h>
 #include <asm/mach/flash.h>
 
 struct sa_subdev_info {

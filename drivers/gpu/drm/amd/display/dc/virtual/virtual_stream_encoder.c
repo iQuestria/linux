@@ -29,8 +29,7 @@
 static void virtual_stream_encoder_dp_set_stream_attribute(
 	struct stream_encoder *enc,
 	struct dc_crtc_timing *crtc_timing,
-	enum dc_color_space output_color_space,
-	uint32_t enable_sdp_splitting) {}
+	enum dc_color_space output_color_space) {}
 
 static void virtual_stream_encoder_hdmi_set_stream_attribute(
 	struct stream_encoder *enc,

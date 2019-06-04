@@ -17,7 +17,6 @@
 #include <linux/pci.h>
 
 #include <asm/cpufeature.h>
-#include <asm/cacheinfo.h>
 #include <asm/amd_nb.h>
 #include <asm/smp.h>
 
@@ -248,7 +247,6 @@ amd_cpuid4(int leaf, union _cpuid4_leaf_eax *eax,
 	switch (leaf) {
 	case 1:
 		l1 = &l1i;
-		/* fall through */
 	case 0:
 		if (!l1->val)
 			return;

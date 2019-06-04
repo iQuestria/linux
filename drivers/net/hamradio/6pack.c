@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 6pack.c	This module implements the 6pack protocol for kernel-based
  *		devices like TTY. It interfaces between a raw TTY and the
@@ -121,7 +120,7 @@ struct sixpack {
 	struct timer_list	tx_t;
 	struct timer_list	resync_t;
 	refcount_t		refcnt;
-	struct completion	dead;
+	struct semaphore	dead_sem;
 	spinlock_t		lock;
 };
 
@@ -390,7 +389,7 @@ static struct sixpack *sp_get(struct tty_struct *tty)
 static void sp_put(struct sixpack *sp)
 {
 	if (refcount_dec_and_test(&sp->refcnt))
-		complete(&sp->dead);
+		up(&sp->dead_sem);
 }
 
 /*
@@ -524,7 +523,10 @@ static void resync_tnc(struct timer_list *t)
 
 
 	/* Start resync timer again -- the TNC might be still absent */
-	mod_timer(&sp->resync_t, jiffies + SIXP_RESYNC_TIMEOUT);
+
+	del_timer(&sp->resync_t);
+	sp->resync_t.expires	= jiffies + SIXP_RESYNC_TIMEOUT;
+	add_timer(&sp->resync_t);
 }
 
 static inline int tnc_init(struct sixpack *sp)
@@ -535,7 +537,9 @@ static inline int tnc_init(struct sixpack *sp)
 
 	sp->tty->ops->write(sp->tty, &inbyte, 1);
 
-	mod_timer(&sp->resync_t, jiffies + SIXP_RESYNC_TIMEOUT);
+	del_timer(&sp->resync_t);
+	sp->resync_t.expires = jiffies + SIXP_RESYNC_TIMEOUT;
+	add_timer(&sp->resync_t);
 
 	return 0;
 }
@@ -572,7 +576,7 @@ static int sixpack_open(struct tty_struct *tty)
 
 	spin_lock_init(&sp->lock);
 	refcount_set(&sp->refcnt, 1);
-	init_completion(&sp->dead);
+	sema_init(&sp->dead_sem, 0);
 
 	/* !!! length of the buffers. MTU is IP MTU, not PACLEN!  */
 
@@ -666,10 +670,10 @@ static void sixpack_close(struct tty_struct *tty)
 	 * we have to wait for all existing users to finish.
 	 */
 	if (!refcount_dec_and_test(&sp->refcnt))
-		wait_for_completion(&sp->dead);
+		down(&sp->dead_sem);
 
 	/* We must stop the queue to avoid potentially scribbling
-	 * on the free buffers. The sp->dead completion is not sufficient
+	 * on the free buffers. The sp->dead_sem is not sufficient
 	 * to protect us from sp->xbuff access.
 	 */
 	netif_stop_queue(sp->dev);
@@ -893,8 +897,11 @@ static void decode_prio_command(struct sixpack *sp, unsigned char cmd)
         /* if the state byte has been received, the TNC is present,
            so the resync timer can be reset. */
 
-	if (sp->tnc_state == TNC_IN_SYNC)
-		mod_timer(&sp->resync_t, jiffies + SIXP_INIT_RESYNC_TIMEOUT);
+	if (sp->tnc_state == TNC_IN_SYNC) {
+		del_timer(&sp->resync_t);
+		sp->resync_t.expires	= jiffies + SIXP_INIT_RESYNC_TIMEOUT;
+		add_timer(&sp->resync_t);
+	}
 
 	sp->status1 = cmd & SIXP_PRIO_DATA_MASK;
 }

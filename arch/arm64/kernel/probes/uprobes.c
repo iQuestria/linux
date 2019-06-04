@@ -171,7 +171,7 @@ int arch_uprobe_exception_notify(struct notifier_block *self,
 static int uprobe_breakpoint_handler(struct pt_regs *regs,
 		unsigned int esr)
 {
-	if (uprobe_pre_sstep_notifier(regs))
+	if (user_mode(regs) && uprobe_pre_sstep_notifier(regs))
 		return DBG_HOOK_HANDLED;
 
 	return DBG_HOOK_ERROR;
@@ -182,16 +182,21 @@ static int uprobe_single_step_handler(struct pt_regs *regs,
 {
 	struct uprobe_task *utask = current->utask;
 
-	WARN_ON(utask && (instruction_pointer(regs) != utask->xol_vaddr + 4));
-	if (uprobe_post_sstep_notifier(regs))
-		return DBG_HOOK_HANDLED;
+	if (user_mode(regs)) {
+		WARN_ON(utask &&
+			(instruction_pointer(regs) != utask->xol_vaddr + 4));
+
+		if (uprobe_post_sstep_notifier(regs))
+			return DBG_HOOK_HANDLED;
+	}
 
 	return DBG_HOOK_ERROR;
 }
 
 /* uprobe breakpoint handler hook */
 static struct break_hook uprobes_break_hook = {
-	.imm = UPROBES_BRK_IMM,
+	.esr_mask = BRK64_ESR_MASK,
+	.esr_val = BRK64_ESR_UPROBES,
 	.fn = uprobe_breakpoint_handler,
 };
 
@@ -202,8 +207,8 @@ static struct step_hook uprobes_step_hook = {
 
 static int __init arch_init_uprobes(void)
 {
-	register_user_break_hook(&uprobes_break_hook);
-	register_user_step_hook(&uprobes_step_hook);
+	register_break_hook(&uprobes_break_hook);
+	register_step_hook(&uprobes_step_hook);
 
 	return 0;
 }

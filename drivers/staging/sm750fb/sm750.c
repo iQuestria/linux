@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/errno.h>
@@ -696,7 +695,7 @@ static int sm750fb_set_drv(struct lynxfb_par *par)
 			output->paths = sm750_crt;
 			crtc->channel = sm750_secondary;
 			/* not consider of padding stuffs for oScreen,need fix */
-			crtc->oScreen = sm750_dev->vidmem_size >> 1;
+			crtc->oScreen = (sm750_dev->vidmem_size >> 1);
 			crtc->vScreen = sm750_dev->pvMem + crtc->oScreen;
 		}
 		break;
@@ -710,7 +709,7 @@ static int sm750fb_set_drv(struct lynxfb_par *par)
 			output->paths = sm750_crt;
 			crtc->channel = sm750_primary;
 			/* not consider of padding stuffs for oScreen,need fix */
-			crtc->oScreen = sm750_dev->vidmem_size >> 1;
+			crtc->oScreen = (sm750_dev->vidmem_size >> 1);
 			crtc->vScreen = sm750_dev->pvMem + crtc->oScreen;
 		}
 		break;
@@ -748,7 +747,7 @@ static int lynxfb_set_fbinfo(struct fb_info *info, int index)
 		lynx750_ext, NULL, vesa_modes,
 	};
 	int cdb[] = {ARRAY_SIZE(lynx750_ext), 0, VESA_MODEDB_SIZE};
-	static const char * const mdb_desc[] = {
+	static const char *mdb_desc[] = {
 		"driver prepared modes",
 		"kernel prepared default modedb",
 		"kernel HELPERS prepared vesa_modes",

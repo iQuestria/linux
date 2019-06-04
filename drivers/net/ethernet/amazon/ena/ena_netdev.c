@@ -224,23 +224,28 @@ static int ena_setup_tx_resources(struct ena_adapter *adapter, int qid)
 	if (!tx_ring->tx_buffer_info) {
 		tx_ring->tx_buffer_info = vzalloc(size);
 		if (!tx_ring->tx_buffer_info)
-			goto err_tx_buffer_info;
+			return -ENOMEM;
 	}
 
 	size = sizeof(u16) * tx_ring->ring_size;
 	tx_ring->free_tx_ids = vzalloc_node(size, node);
 	if (!tx_ring->free_tx_ids) {
 		tx_ring->free_tx_ids = vzalloc(size);
-		if (!tx_ring->free_tx_ids)
-			goto err_free_tx_ids;
+		if (!tx_ring->free_tx_ids) {
+			vfree(tx_ring->tx_buffer_info);
+			return -ENOMEM;
+		}
 	}
 
 	size = tx_ring->tx_max_header_size;
 	tx_ring->push_buf_intermediate_buf = vzalloc_node(size, node);
 	if (!tx_ring->push_buf_intermediate_buf) {
 		tx_ring->push_buf_intermediate_buf = vzalloc(size);
-		if (!tx_ring->push_buf_intermediate_buf)
-			goto err_push_buf_intermediate_buf;
+		if (!tx_ring->push_buf_intermediate_buf) {
+			vfree(tx_ring->tx_buffer_info);
+			vfree(tx_ring->free_tx_ids);
+			return -ENOMEM;
+		}
 	}
 
 	/* Req id ring for TX out of order completions */
@@ -254,15 +259,6 @@ static int ena_setup_tx_resources(struct ena_adapter *adapter, int qid)
 	tx_ring->next_to_clean = 0;
 	tx_ring->cpu = ena_irq->cpu;
 	return 0;
-
-err_push_buf_intermediate_buf:
-	vfree(tx_ring->free_tx_ids);
-	tx_ring->free_tx_ids = NULL;
-err_free_tx_ids:
-	vfree(tx_ring->tx_buffer_info);
-	tx_ring->tx_buffer_info = NULL;
-err_tx_buffer_info:
-	return -ENOMEM;
 }
 
 /* ena_free_tx_resources - Free I/O Tx Resources per Queue
@@ -382,7 +378,6 @@ static int ena_setup_rx_resources(struct ena_adapter *adapter,
 		rx_ring->free_rx_ids = vzalloc(size);
 		if (!rx_ring->free_rx_ids) {
 			vfree(rx_ring->rx_buffer_info);
-			rx_ring->rx_buffer_info = NULL;
 			return -ENOMEM;
 		}
 	}
@@ -1825,7 +1820,6 @@ err_setup_rx:
 err_setup_tx:
 	ena_free_io_irq(adapter);
 err_req_irq:
-	ena_del_napi(adapter);
 
 	return rc;
 }
@@ -2242,7 +2236,7 @@ static netdev_tx_t ena_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 	}
 
-	if (netif_xmit_stopped(txq) || !netdev_xmit_more()) {
+	if (netif_xmit_stopped(txq) || !skb->xmit_more) {
 		/* trigger the dma engine. ena_com_write_sq_doorbell()
 		 * has a mb
 		 */
@@ -2264,7 +2258,8 @@ error_drop_packet:
 }
 
 static u16 ena_select_queue(struct net_device *dev, struct sk_buff *skb,
-			    struct net_device *sb_dev)
+			    struct net_device *sb_dev,
+			    select_queue_fallback_t fallback)
 {
 	u16 qid;
 	/* we suspect that this is good for in--kernel network services that
@@ -2274,7 +2269,7 @@ static u16 ena_select_queue(struct net_device *dev, struct sk_buff *skb,
 	if (skb_rx_queue_recorded(skb))
 		qid = skb_get_rx_queue(skb);
 	else
-		qid = netdev_pick_tx(dev, skb, NULL);
+		qid = fallback(dev, skb, NULL);
 
 	return qid;
 }
@@ -2297,7 +2292,7 @@ static void ena_config_host_info(struct ena_com_dev *ena_dev,
 	host_info->bdf = (pdev->bus->number << 8) | pdev->devfn;
 	host_info->os_type = ENA_ADMIN_OS_LINUX;
 	host_info->kernel_ver = LINUX_VERSION_CODE;
-	strlcpy(host_info->kernel_ver_str, utsname()->version,
+	strncpy(host_info->kernel_ver_str, utsname()->version,
 		sizeof(host_info->kernel_ver_str) - 1);
 	host_info->os_dist = 0;
 	strncpy(host_info->os_dist_str, utsname()->release,
@@ -2668,6 +2663,11 @@ static int ena_restore_device(struct ena_adapter *adapter)
 		goto err_device_destroy;
 	}
 
+	clear_bit(ENA_FLAG_ONGOING_RESET, &adapter->flags);
+	/* Make sure we don't have a race with AENQ Links state handler */
+	if (test_bit(ENA_FLAG_LINK_UP, &adapter->flags))
+		netif_carrier_on(adapter->netdev);
+
 	rc = ena_enable_msix_and_set_admin_interrupts(adapter,
 						      adapter->num_queues);
 	if (rc) {
@@ -2684,11 +2684,6 @@ static int ena_restore_device(struct ena_adapter *adapter)
 	}
 
 	set_bit(ENA_FLAG_DEVICE_RUNNING, &adapter->flags);
-
-	clear_bit(ENA_FLAG_ONGOING_RESET, &adapter->flags);
-	if (test_bit(ENA_FLAG_LINK_UP, &adapter->flags))
-		netif_carrier_on(adapter->netdev);
-
 	mod_timer(&adapter->timer_service, round_jiffies(jiffies + HZ));
 	dev_err(&pdev->dev,
 		"Device reset completed successfully, Driver info: %s\n",

@@ -35,6 +35,13 @@ void mmu_notifier_call_srcu(struct rcu_head *rcu,
 }
 EXPORT_SYMBOL_GPL(mmu_notifier_call_srcu);
 
+void mmu_notifier_synchronize(void)
+{
+	/* Wait for any running method to finish. */
+	srcu_barrier(&srcu);
+}
+EXPORT_SYMBOL_GPL(mmu_notifier_synchronize);
+
 /*
  * This function can't run concurrently against mmu_notifier_register
  * because mm->mm_users > 0 during mmu_notifier_register and exit_mmap
@@ -167,20 +174,22 @@ void __mmu_notifier_change_pte(struct mm_struct *mm, unsigned long address,
 	srcu_read_unlock(&srcu, id);
 }
 
-int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
+int __mmu_notifier_invalidate_range_start(struct mm_struct *mm,
+				  unsigned long start, unsigned long end,
+				  bool blockable)
 {
 	struct mmu_notifier *mn;
 	int ret = 0;
 	int id;
 
 	id = srcu_read_lock(&srcu);
-	hlist_for_each_entry_rcu(mn, &range->mm->mmu_notifier_mm->list, hlist) {
+	hlist_for_each_entry_rcu(mn, &mm->mmu_notifier_mm->list, hlist) {
 		if (mn->ops->invalidate_range_start) {
-			int _ret = mn->ops->invalidate_range_start(mn, range);
+			int _ret = mn->ops->invalidate_range_start(mn, mm, start, end, blockable);
 			if (_ret) {
 				pr_info("%pS callback failed with %d in %sblockable context.\n",
-					mn->ops->invalidate_range_start, _ret,
-					!mmu_notifier_range_blockable(range) ? "non-" : "");
+						mn->ops->invalidate_range_start, _ret,
+						!blockable ? "non-" : "");
 				ret = _ret;
 			}
 		}
@@ -191,14 +200,16 @@ int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 }
 EXPORT_SYMBOL_GPL(__mmu_notifier_invalidate_range_start);
 
-void __mmu_notifier_invalidate_range_end(struct mmu_notifier_range *range,
+void __mmu_notifier_invalidate_range_end(struct mm_struct *mm,
+					 unsigned long start,
+					 unsigned long end,
 					 bool only_end)
 {
 	struct mmu_notifier *mn;
 	int id;
 
 	id = srcu_read_lock(&srcu);
-	hlist_for_each_entry_rcu(mn, &range->mm->mmu_notifier_mm->list, hlist) {
+	hlist_for_each_entry_rcu(mn, &mm->mmu_notifier_mm->list, hlist) {
 		/*
 		 * Call invalidate_range here too to avoid the need for the
 		 * subsystem of having to register an invalidate_range_end
@@ -213,11 +224,9 @@ void __mmu_notifier_invalidate_range_end(struct mmu_notifier_range *range,
 		 * already happen under page table lock.
 		 */
 		if (!only_end && mn->ops->invalidate_range)
-			mn->ops->invalidate_range(mn, range->mm,
-						  range->start,
-						  range->end);
+			mn->ops->invalidate_range(mn, mm, start, end);
 		if (mn->ops->invalidate_range_end)
-			mn->ops->invalidate_range_end(mn, range);
+			mn->ops->invalidate_range_end(mn, mm, start, end);
 	}
 	srcu_read_unlock(&srcu, id);
 }
@@ -395,13 +404,3 @@ void mmu_notifier_unregister_no_release(struct mmu_notifier *mn,
 	mmdrop(mm);
 }
 EXPORT_SYMBOL_GPL(mmu_notifier_unregister_no_release);
-
-bool
-mmu_notifier_range_update_to_read_only(const struct mmu_notifier_range *range)
-{
-	if (!range->vma || range->event != MMU_NOTIFY_PROTECTION_VMA)
-		return false;
-	/* Return true if the vma still have the read flag set. */
-	return range->vma->vm_flags & VM_READ;
-}
-EXPORT_SYMBOL_GPL(mmu_notifier_range_update_to_read_only);

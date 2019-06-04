@@ -206,9 +206,8 @@ replay:
 			return -ENOMEM;
 		}
 
-		err = nla_parse_deprecated(cda, ss->cb[cb_id].attr_count,
-					   attr, attrlen,
-					   ss->cb[cb_id].policy, extack);
+		err = nla_parse(cda, ss->cb[cb_id].attr_count, attr, attrlen,
+				ss->cb[cb_id].policy, extack);
 		if (err < 0) {
 			rcu_read_unlock();
 			return err;
@@ -422,10 +421,8 @@ replay:
 				goto ack;
 			}
 
-			err = nla_parse_deprecated(cda,
-						   ss->cb[cb_id].attr_count,
-						   attr, attrlen,
-						   ss->cb[cb_id].policy, NULL);
+			err = nla_parse(cda, ss->cb[cb_id].attr_count, attr,
+					attrlen, ss->cb[cb_id].policy, NULL);
 			if (err < 0)
 				goto ack;
 
@@ -523,8 +520,8 @@ static void nfnetlink_rcv_skb_batch(struct sk_buff *skb, struct nlmsghdr *nlh)
 	if (skb->len < NLMSG_HDRLEN + sizeof(struct nfgenmsg))
 		return;
 
-	err = nla_parse_deprecated(cda, NFNL_BATCH_MAX, attr, attrlen,
-				   nfnl_batch_policy, NULL);
+	err = nla_parse(cda, NFNL_BATCH_MAX, attr, attrlen, nfnl_batch_policy,
+			NULL);
 	if (err < 0) {
 		netlink_ack(skb, nlh, err, NULL);
 		return;

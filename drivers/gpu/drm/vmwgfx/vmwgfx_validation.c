@@ -76,8 +76,6 @@ struct vmw_validation_res_node {
 	u32 switching_backup : 1;
 	u32 first_usage : 1;
 	u32 reserved : 1;
-	u32 dirty : 1;
-	u32 dirty_set : 1;
 	unsigned long private[0];
 };
 
@@ -106,24 +104,10 @@ void *vmw_validation_mem_alloc(struct vmw_validation_context *ctx,
 		return NULL;
 
 	if (ctx->mem_size_left < size) {
-		struct page *page;
+		struct page *page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 
-		if (ctx->vm && ctx->vm_size_left < PAGE_SIZE) {
-			int ret = ctx->vm->reserve_mem(ctx->vm, ctx->vm->gran);
-
-			if (ret)
-				return NULL;
-
-			ctx->vm_size_left += ctx->vm->gran;
-			ctx->total_mem += ctx->vm->gran;
-		}
-
-		page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 		if (!page)
 			return NULL;
-
-		if (ctx->vm)
-			ctx->vm_size_left -= PAGE_SIZE;
 
 		list_add_tail(&page->lru, &ctx->page_list);
 		ctx->page_address = page_address(page);
@@ -154,11 +138,6 @@ static void vmw_validation_mem_free(struct vmw_validation_context *ctx)
 	}
 
 	ctx->mem_size_left = 0;
-	if (ctx->vm && ctx->total_mem) {
-		ctx->vm->unreserve_mem(ctx->vm, ctx->total_mem);
-		ctx->total_mem = 0;
-		ctx->vm_size_left = 0;
-	}
 }
 
 /**
@@ -287,7 +266,7 @@ int vmw_validation_add_bo(struct vmw_validation_context *ctx,
 		val_buf->bo = ttm_bo_get_unless_zero(&vbo->base);
 		if (!val_buf->bo)
 			return -ESRCH;
-		val_buf->num_shared = 0;
+		val_buf->shared = false;
 		list_add_tail(&val_buf->head, &ctx->bo_list);
 		bo_node->as_mob = as_mob;
 		bo_node->cpu_blit = cpu_blit;
@@ -301,7 +280,6 @@ int vmw_validation_add_bo(struct vmw_validation_context *ctx,
  * @ctx: The validation context.
  * @res: The resource.
  * @priv_size: Size of private, additional metadata.
- * @dirty: Whether to change dirty status.
  * @p_node: Output pointer of additional metadata address.
  * @first_usage: Whether this was the first time this resource was seen.
  *
@@ -310,7 +288,6 @@ int vmw_validation_add_bo(struct vmw_validation_context *ctx,
 int vmw_validation_add_resource(struct vmw_validation_context *ctx,
 				struct vmw_resource *res,
 				size_t priv_size,
-				u32 dirty,
 				void **p_node,
 				bool *first_usage)
 {
@@ -325,7 +302,8 @@ int vmw_validation_add_resource(struct vmw_validation_context *ctx,
 
 	node = vmw_validation_mem_alloc(ctx, sizeof(*node) + priv_size);
 	if (!node) {
-		VMW_DEBUG_USER("Failed to allocate a resource validation entry.\n");
+		DRM_ERROR("Failed to allocate a resource validation "
+			  "entry.\n");
 		return -ENOMEM;
 	}
 
@@ -361,40 +339,12 @@ int vmw_validation_add_resource(struct vmw_validation_context *ctx,
 	}
 
 out_fill:
-	if (dirty) {
-		node->dirty_set = 1;
-		/* Overwriting previous information here is intentional! */
-		node->dirty = (dirty & VMW_RES_DIRTY_SET) ? 1 : 0;
-	}
 	if (first_usage)
 		*first_usage = node->first_usage;
 	if (p_node)
 		*p_node = &node->private;
 
 	return 0;
-}
-
-/**
- * vmw_validation_res_set_dirty - Register a resource dirty set or clear during
- * validation.
- * @ctx: The validation context.
- * @val_private: The additional meta-data pointer returned when the
- * resource was registered with the validation context. Used to identify
- * the resource.
- * @dirty: Dirty information VMW_RES_DIRTY_XX
- */
-void vmw_validation_res_set_dirty(struct vmw_validation_context *ctx,
-				  void *val_private, u32 dirty)
-{
-	struct vmw_validation_res_node *val;
-
-	if (!dirty)
-		return;
-
-	val = container_of(val_private, typeof(*val), private);
-	val->dirty_set = 1;
-	/* Overwriting previous information here is intentional! */
-	val->dirty = (dirty & VMW_RES_DIRTY_SET) ? 1 : 0;
 }
 
 /**
@@ -481,23 +431,15 @@ void vmw_validation_res_unreserve(struct vmw_validation_context *ctx,
 	struct vmw_validation_res_node *val;
 
 	list_splice_init(&ctx->resource_ctx_list, &ctx->resource_list);
-	if (backoff)
-		list_for_each_entry(val, &ctx->resource_list, head) {
-			if (val->reserved)
-				vmw_resource_unreserve(val->res,
-						       false, false, false,
-						       NULL, 0);
-		}
-	else
-		list_for_each_entry(val, &ctx->resource_list, head) {
-			if (val->reserved)
-				vmw_resource_unreserve(val->res,
-						       val->dirty_set,
-						       val->dirty,
-						       val->switching_backup,
-						       val->new_backup,
-						       val->new_backup_offset);
-		}
+
+	list_for_each_entry(val, &ctx->resource_list, head) {
+		if (val->reserved)
+			vmw_resource_unreserve(val->res,
+					       !backoff &&
+					       val->switching_backup,
+					       val->new_backup,
+					       val->new_backup_offset);
+	}
 }
 
 /**
@@ -667,10 +609,8 @@ void vmw_validation_unref_lists(struct vmw_validation_context *ctx)
 	struct vmw_validation_bo_node *entry;
 	struct vmw_validation_res_node *val;
 
-	list_for_each_entry(entry, &ctx->bo_list, base.head) {
-		ttm_bo_put(entry->base.bo);
-		entry->base.bo = NULL;
-	}
+	list_for_each_entry(entry, &ctx->bo_list, base.head)
+		ttm_bo_unref(&entry->base.bo);
 
 	list_splice_init(&ctx->resource_ctx_list, &ctx->resource_list);
 	list_for_each_entry(val, &ctx->resource_list, head)

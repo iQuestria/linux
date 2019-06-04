@@ -41,7 +41,6 @@
 #include "dir.h"
 #include "meta_io.h"
 #include "trace_gfs2.h"
-#include "lops.h"
 
 #define DO 0
 #define UNDO 1
@@ -118,8 +117,8 @@ static struct gfs2_sbd *init_sbd(struct super_block *sb)
 
 	spin_lock_init(&sdp->sd_log_lock);
 	atomic_set(&sdp->sd_log_pinned, 0);
-	INIT_LIST_HEAD(&sdp->sd_log_revokes);
-	INIT_LIST_HEAD(&sdp->sd_log_ordered);
+	INIT_LIST_HEAD(&sdp->sd_log_le_revoke);
+	INIT_LIST_HEAD(&sdp->sd_log_le_ordered);
 	spin_lock_init(&sdp->sd_ordered_lock);
 
 	init_waitqueue_head(&sdp->sd_log_waitq);
@@ -617,7 +616,7 @@ static int check_journal_clean(struct gfs2_sbd *sdp, struct gfs2_jdesc *jd)
 		fs_err(sdp, "Error checking journal for spectator mount.\n");
 		goto out_unlock;
 	}
-	error = gfs2_find_jhead(jd, &head, false);
+	error = gfs2_find_jhead(jd, &head);
 	if (error) {
 		fs_err(sdp, "Error parsing journal for spectator mount.\n");
 		goto out_unlock;

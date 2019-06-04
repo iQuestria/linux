@@ -720,7 +720,7 @@ int padata_start(struct padata_instance *pinst)
 	if (pinst->flags & PADATA_INVALID)
 		err = -EINVAL;
 
-	__padata_start(pinst);
+	 __padata_start(pinst);
 
 	mutex_unlock(&pinst->lock);
 
@@ -957,7 +957,6 @@ static struct attribute *padata_default_attrs[] = {
 	&parallel_cpumask_attr.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(padata_default);
 
 static ssize_t padata_sysfs_show(struct kobject *kobj,
 				 struct attribute *attr, char *buf)
@@ -996,7 +995,7 @@ static const struct sysfs_ops padata_sysfs_ops = {
 
 static struct kobj_type padata_attr_type = {
 	.sysfs_ops = &padata_sysfs_ops,
-	.default_groups = padata_default_groups,
+	.default_attrs = padata_default_attrs,
 	.release = padata_sysfs_release,
 };
 

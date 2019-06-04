@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file contains the major functions in WLAN
  * driver. It includes init, exit, open, close and main

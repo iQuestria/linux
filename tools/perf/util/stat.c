@@ -277,11 +277,9 @@ process_counter_values(struct perf_stat_config *config, struct perf_evsel *evsel
 		if (!evsel->snapshot)
 			perf_evsel__compute_deltas(evsel, cpu, thread, count);
 		perf_counts_values__scale(count, config->scale, NULL);
-		if ((config->aggr_mode == AGGR_NONE) && (!evsel->percore)) {
-			perf_stat__update_shadow_stats(evsel, count->val,
-						       cpu, &rt_stat);
-		}
-
+		if (config->aggr_mode == AGGR_NONE)
+			perf_stat__update_shadow_stats(evsel, count->val, cpu,
+						       &rt_stat);
 		if (config->aggr_mode == AGGR_THREAD) {
 			if (config->stats)
 				perf_stat__update_shadow_stats(evsel,
@@ -293,8 +291,10 @@ process_counter_values(struct perf_stat_config *config, struct perf_evsel *evsel
 		break;
 	case AGGR_GLOBAL:
 		aggr->val += count->val;
-		aggr->ena += count->ena;
-		aggr->run += count->run;
+		if (config->scale) {
+			aggr->ena += count->ena;
+			aggr->run += count->run;
+		}
 	case AGGR_UNSET:
 	default:
 		break;
@@ -442,8 +442,10 @@ int create_perf_stat_counter(struct perf_evsel *evsel,
 	struct perf_event_attr *attr = &evsel->attr;
 	struct perf_evsel *leader = evsel->leader;
 
-	attr->read_format = PERF_FORMAT_TOTAL_TIME_ENABLED |
-			    PERF_FORMAT_TOTAL_TIME_RUNNING;
+	if (config->scale) {
+		attr->read_format = PERF_FORMAT_TOTAL_TIME_ENABLED |
+				    PERF_FORMAT_TOTAL_TIME_RUNNING;
+	}
 
 	/*
 	 * The event is part of non trivial group, let's enable

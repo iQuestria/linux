@@ -21,6 +21,7 @@
 #include <linux/firmware.h>
 #include <net/vxlan.h>
 #include <linux/kthread.h>
+#include <net/switchdev.h>
 #include "liquidio_common.h"
 #include "octeon_droq.h"
 #include "octeon_iq.h"
@@ -1192,11 +1193,6 @@ static void send_rx_ctrl_cmd(struct lio *lio, int start_stop)
 	sc = (struct octeon_soft_command *)
 		octeon_alloc_soft_command(oct, OCTNET_CMD_SIZE,
 					  16, 0);
-	if (!sc) {
-		netif_info(lio, rx_err, lio->netdev,
-			   "Failed to allocate octeon_soft_command\n");
-		return;
-	}
 
 	ncmd = (union octnet_cmd *)sc->virtdptr;
 
@@ -2522,7 +2518,7 @@ static netdev_tx_t liquidio_xmit(struct sk_buff *skb, struct net_device *netdev)
 		irh->vlan = skb_vlan_tag_get(skb) & 0xfff;
 	}
 
-	xmit_more = netdev_xmit_more();
+	xmit_more = skb->xmit_more;
 
 	if (unlikely(cmdsetup.s.timestamp))
 		status = send_nic_timestamp_pkt(oct, &ndata, finfo, xmit_more);
@@ -2912,7 +2908,7 @@ static int liquidio_set_vf_spoofchk(struct net_device *netdev, int vfidx,
 	nctrl.ncmd.s.param2 = enable;
 	nctrl.ncmd.s.more = 0;
 	nctrl.iq_no = lio->linfo.txpciq[0].s.q_no;
-	nctrl.cb_fn = NULL;
+	nctrl.cb_fn = 0;
 
 	retval = octnet_send_nic_ctrl_pkt(oct, &nctrl);
 
@@ -3188,8 +3184,7 @@ static const struct devlink_ops liquidio_devlink_ops = {
 };
 
 static int
-liquidio_get_port_parent_id(struct net_device *dev,
-			    struct netdev_phys_item_id *ppid)
+lio_pf_switchdev_attr_get(struct net_device *dev, struct switchdev_attr *attr)
 {
 	struct lio *lio = GET_LIO(dev);
 	struct octeon_device *oct = lio->oct_dev;
@@ -3197,11 +3192,23 @@ liquidio_get_port_parent_id(struct net_device *dev,
 	if (oct->eswitch_mode != DEVLINK_ESWITCH_MODE_SWITCHDEV)
 		return -EOPNOTSUPP;
 
-	ppid->id_len = ETH_ALEN;
-	ether_addr_copy(ppid->id, (void *)&lio->linfo.hw_addr + 2);
+	switch (attr->id) {
+	case SWITCHDEV_ATTR_ID_PORT_PARENT_ID:
+		attr->u.ppid.id_len = ETH_ALEN;
+		ether_addr_copy(attr->u.ppid.id,
+				(void *)&lio->linfo.hw_addr + 2);
+		break;
+
+	default:
+		return -EOPNOTSUPP;
+	}
 
 	return 0;
 }
+
+static const struct switchdev_ops lio_pf_switchdev_ops = {
+	.switchdev_port_attr_get = lio_pf_switchdev_attr_get,
+};
 
 static int liquidio_get_vf_stats(struct net_device *netdev, int vfidx,
 				 struct ifla_vf_stats *vf_stats)
@@ -3252,7 +3259,6 @@ static const struct net_device_ops lionetdevops = {
 	.ndo_set_vf_trust	= liquidio_set_vf_trust,
 	.ndo_set_vf_link_state  = liquidio_set_vf_link_state,
 	.ndo_get_vf_stats	= liquidio_get_vf_stats,
-	.ndo_get_port_parent_id	= liquidio_get_port_parent_id,
 };
 
 /** \brief Entry point for the liquidio module
@@ -3528,6 +3534,7 @@ static int setup_nic_devices(struct octeon_device *octeon_dev)
 		 * netdev tasks.
 		 */
 		netdev->netdev_ops = &lionetdevops;
+		SWITCHDEV_SET_OPS(netdev, &lio_pf_switchdev_ops);
 
 		retval = netif_set_real_num_rx_queues(netdev, num_oqueues);
 		if (retval) {

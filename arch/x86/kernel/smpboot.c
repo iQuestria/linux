@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
  /*
  *	x86 SMP booting functions
  *
@@ -12,6 +11,9 @@
  *	Thanks to Intel for making available several different Pentium,
  *	Pentium Pro and Pentium-II/Xeon MP machines.
  *	Original development of Linux SMP code supported by Caldera.
+ *
+ *	This code is released under the GNU General Public License version 2 or
+ *	later.
  *
  *	Fixes
  *		Felix Koop	:	NR_CPUS used properly
@@ -54,7 +56,6 @@
 #include <linux/stackprotector.h>
 #include <linux/gfp.h>
 #include <linux/cpuidle.h>
-#include <linux/numa.h>
 
 #include <asm/acpi.h>
 #include <asm/desc.h>
@@ -148,7 +149,7 @@ static inline void smpboot_restore_warm_reset_vector(void)
  */
 static void smp_callin(void)
 {
-	int cpuid;
+	int cpuid, phys_id;
 
 	/*
 	 * If waken up by an INIT in an 82489DX configuration
@@ -157,6 +158,11 @@ static void smp_callin(void)
 	 * now safe to touch our local APIC.
 	 */
 	cpuid = smp_processor_id();
+
+	/*
+	 * (This works even if the APIC is not enabled.)
+	 */
+	phys_id = read_apic_id();
 
 	/*
 	 * the boot CPU has finished the init stage and is spinning
@@ -453,7 +459,7 @@ static bool match_llc(struct cpuinfo_x86 *c, struct cpuinfo_x86 *o)
  * multicore group inside a NUMA node.  If this happens, we will
  * discard the MC level of the topology later.
  */
-static bool match_pkg(struct cpuinfo_x86 *c, struct cpuinfo_x86 *o)
+static bool match_die(struct cpuinfo_x86 *c, struct cpuinfo_x86 *o)
 {
 	if (c->phys_proc_id == o->phys_proc_id)
 		return true;
@@ -544,7 +550,7 @@ void set_cpu_sibling_map(int cpu)
 	for_each_cpu(i, cpu_sibling_setup_mask) {
 		o = &cpu_data(i);
 
-		if ((i == cpu) || (has_mp && match_pkg(c, o))) {
+		if ((i == cpu) || (has_mp && match_die(c, o))) {
 			link_mask(topology_core_cpumask, cpu, i);
 
 			/*
@@ -568,7 +574,7 @@ void set_cpu_sibling_map(int cpu)
 			} else if (i != cpu && !c->booted_cores)
 				c->booted_cores = cpu_data(i).booted_cores;
 		}
-		if (match_pkg(c, o) && !topology_same_node(c, o))
+		if (match_die(c, o) && !topology_same_node(c, o))
 			x86_has_numa_in_package = true;
 	}
 
@@ -835,7 +841,7 @@ wakeup_secondary_cpu_via_init(int phys_apicid, unsigned long start_eip)
 /* reduce the number of lines printed when booting a large cpu count system */
 static void announce_cpu(int cpu, int apicid)
 {
-	static int current_node = NUMA_NO_NODE;
+	static int current_node = -1;
 	int node = early_cpu_to_node(cpu);
 	static int width, node_width;
 
@@ -933,27 +939,20 @@ out:
 	return boot_error;
 }
 
-int common_cpu_up(unsigned int cpu, struct task_struct *idle)
+void common_cpu_up(unsigned int cpu, struct task_struct *idle)
 {
-	int ret;
-
 	/* Just in case we booted with a single CPU. */
 	alternatives_enable_smp();
 
 	per_cpu(current_task, cpu) = idle;
 
-	/* Initialize the interrupt stack(s) */
-	ret = irq_init_percpu_irqstack(cpu);
-	if (ret)
-		return ret;
-
 #ifdef CONFIG_X86_32
 	/* Stack for startup_32 can be just as for start_secondary onwards */
+	irq_ctx_init(cpu);
 	per_cpu(cpu_current_top_of_stack, cpu) = task_top_of_stack(idle);
 #else
 	initial_gs = per_cpu_offset(cpu);
 #endif
-	return 0;
 }
 
 /*
@@ -1111,9 +1110,7 @@ int native_cpu_up(unsigned int cpu, struct task_struct *tidle)
 	/* the FPU context is blank, nobody can own it */
 	per_cpu(fpu_fpregs_owner_ctx, cpu) = NULL;
 
-	err = common_cpu_up(cpu, tidle);
-	if (err)
-		return err;
+	common_cpu_up(cpu, tidle);
 
 	err = do_boot_cpu(apicid, cpu, tidle, &cpu0_nmi_registered);
 	if (err) {
@@ -1350,7 +1347,7 @@ void __init calculate_max_logical_packages(void)
 	 * extrapolate the boot cpu's data to all packages.
 	 */
 	ncpus = cpu_data(0).booted_cores * topology_max_smt_threads();
-	__max_logical_packages = DIV_ROUND_UP(total_cpus, ncpus);
+	__max_logical_packages = DIV_ROUND_UP(nr_cpu_ids, ncpus);
 	pr_info("Max logical packages: %u\n", __max_logical_packages);
 }
 

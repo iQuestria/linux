@@ -23,10 +23,9 @@
 #include <linux/err.h>
 #include <linux/crypto.h>
 #include <linux/delay.h>
-#include <asm/simd.h>
+#include <linux/hardirq.h>
 #include <asm/switch_to.h>
 #include <crypto/aes.h>
-#include <crypto/internal/simd.h>
 #include <crypto/scatterwalk.h>
 #include <crypto/skcipher.h>
 
@@ -82,14 +81,13 @@ static int p8_aes_cbc_setkey(struct crypto_tfm *tfm, const u8 *key,
 	pagefault_disable();
 	enable_kernel_vsx();
 	ret = aes_p8_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
-	ret |= aes_p8_set_decrypt_key(key, keylen * 8, &ctx->dec_key);
+	ret += aes_p8_set_decrypt_key(key, keylen * 8, &ctx->dec_key);
 	disable_kernel_vsx();
 	pagefault_enable();
 	preempt_enable();
 
-	ret |= crypto_sync_skcipher_setkey(ctx->fallback, key, keylen);
-
-	return ret ? -EINVAL : 0;
+	ret += crypto_sync_skcipher_setkey(ctx->fallback, key, keylen);
+	return ret;
 }
 
 static int p8_aes_cbc_encrypt(struct blkcipher_desc *desc,
@@ -101,7 +99,7 @@ static int p8_aes_cbc_encrypt(struct blkcipher_desc *desc,
 	struct p8_aes_cbc_ctx *ctx =
 		crypto_tfm_ctx(crypto_blkcipher_tfm(desc->tfm));
 
-	if (!crypto_simd_usable()) {
+	if (in_interrupt()) {
 		SYNC_SKCIPHER_REQUEST_ON_STACK(req, ctx->fallback);
 		skcipher_request_set_sync_tfm(req, ctx->fallback);
 		skcipher_request_set_callback(req, desc->flags, NULL, NULL);
@@ -140,7 +138,7 @@ static int p8_aes_cbc_decrypt(struct blkcipher_desc *desc,
 	struct p8_aes_cbc_ctx *ctx =
 		crypto_tfm_ctx(crypto_blkcipher_tfm(desc->tfm));
 
-	if (!crypto_simd_usable()) {
+	if (in_interrupt()) {
 		SYNC_SKCIPHER_REQUEST_ON_STACK(req, ctx->fallback);
 		skcipher_request_set_sync_tfm(req, ctx->fallback);
 		skcipher_request_set_callback(req, desc->flags, NULL, NULL);

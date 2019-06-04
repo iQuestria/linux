@@ -82,7 +82,7 @@ void core_link_disable_stream(struct pipe_ctx *pipe_ctx, int option);
 
 void core_link_set_avmute(struct pipe_ctx *pipe_ctx, bool enable);
 /********** DAL Core*********************/
-#include "hw/clk_mgr.h"
+#include "display_clock.h"
 #include "transform.h"
 #include "dpp.h"
 
@@ -95,10 +95,10 @@ struct resource_funcs {
 	void (*link_init)(struct dc_link *link);
 	struct link_encoder *(*link_enc_create)(
 			const struct encoder_init_data *init);
+
 	bool (*validate_bandwidth)(
 					struct dc *dc,
-					struct dc_state *context,
-					bool fast_validate);
+					struct dc_state *context);
 
 	enum dc_status (*validate_global)(
 		struct dc *dc,
@@ -144,8 +144,9 @@ struct resource_pool {
 	struct stream_encoder *stream_enc[MAX_PIPES * 2];
 	struct hubbub *hubbub;
 	struct mpc *mpc;
-	struct pp_smu_funcs *pp_smu;
-	struct dce_aux *engines[MAX_PIPES];
+	struct pp_smu_funcs_rv *pp_smu;
+	struct pp_smu_display_requirement_rv pp_smu_req;
+	struct aux_engine *engines[MAX_PIPES];
 	struct dce_i2c_hw *hw_i2cs[MAX_PIPES];
 	struct dce_i2c_sw *sw_i2cs[MAX_PIPES];
 	bool i2c_hw_buffer_in_use;
@@ -153,12 +154,7 @@ struct resource_pool {
 	unsigned int pipe_count;
 	unsigned int underlay_pipe_index;
 	unsigned int stream_enc_count;
-
-	struct {
-		unsigned int xtalin_clock_inKhz;
-		unsigned int dccg_ref_clock_inKhz;
-		unsigned int dchub_ref_clock_inKhz;
-	} ref_clocks;
+	unsigned int ref_clock_inKhz;
 	unsigned int timing_generator_count;
 
 	/*
@@ -173,7 +169,6 @@ struct resource_pool {
 	unsigned int audio_count;
 	struct audio_support audio_support;
 
-	struct clk_mgr *clk_mgr;
 	struct dccg *dccg;
 	struct irq_service *irqs;
 
@@ -184,8 +179,13 @@ struct resource_pool {
 	const struct resource_caps *res_cap;
 };
 
-struct dcn_fe_bandwidth {
+struct dcn_fe_clocks {
 	int dppclk_khz;
+};
+
+struct dcn_fe_bandwidth {
+	struct dcn_fe_clocks calc;
+	struct dcn_fe_clocks cur;
 };
 
 struct stream_resource {
@@ -266,26 +266,11 @@ struct dcn_bw_output {
 	struct dcn_watermark_set watermarks;
 };
 
-union bw_output {
+union bw_context {
 	struct dcn_bw_output dcn;
 	struct dce_bw_output dce;
 };
 
-struct bw_context {
-	union bw_output bw;
-	struct display_mode_lib dml;
-};
-/**
- * struct dc_state - The full description of a state requested by a user
- *
- * @streams: Stream properties
- * @stream_status: The planes on a given stream
- * @res_ctx: Persistent state of resources
- * @bw_ctx: The output from bandwidth and watermark calculations and the DML
- * @pp_display_cfg: PowerPlay clocks and settings
- * @dcn_bw_vars: non-stack memory to support bandwidth calculations
- *
- */
 struct dc_state {
 	struct dc_stream_state *streams[MAX_PIPES];
 	struct dc_stream_status stream_status[MAX_PIPES];
@@ -293,7 +278,8 @@ struct dc_state {
 
 	struct resource_context res_ctx;
 
-	struct bw_context bw_ctx;
+	/* The output from BW and WM calculations. */
+	union bw_context bw;
 
 	/* Note: these are big structures, do *not* put on stack! */
 	struct dm_pp_display_configuration pp_display_cfg;
@@ -301,11 +287,7 @@ struct dc_state {
 	struct dcn_bw_internal_vars dcn_bw_vars;
 #endif
 
-	struct clk_mgr *clk_mgr;
-
-	struct {
-		bool full_update_needed : 1;
-	} commit_hints;
+	struct dccg *dis_clk;
 
 	struct kref refcount;
 };

@@ -18,7 +18,7 @@
  * awoken.
  */
 struct rcuwait {
-	struct task_struct __rcu *task;
+	struct task_struct *task;
 };
 
 #define __RCUWAIT_INITIALIZER(name)		\

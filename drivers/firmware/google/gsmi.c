@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2010 Google Inc. All Rights Reserved.
  * Author: dlaurie@google.com (Duncan Laurie)

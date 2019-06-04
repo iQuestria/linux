@@ -92,7 +92,7 @@ struct vpbe_config {
 	struct encoder_config_info *ext_encoders;
 	/* amplifier information goes here */
 	struct amp_config_info *amp;
-	unsigned int num_outputs;
+	int num_outputs;
 	/* Order is venc outputs followed by LCD and then external encoders */
 	struct vpbe_output *outputs;
 };
@@ -100,6 +100,10 @@ struct vpbe_config {
 struct vpbe_device;
 
 struct vpbe_device_ops {
+	/* crop cap for the display */
+	int (*g_cropcap)(struct vpbe_device *vpbe_dev,
+			 struct v4l2_cropcap *cropcap);
+
 	/* Enumerate the outputs */
 	int (*enum_outputs)(struct vpbe_device *vpbe_dev,
 			    struct v4l2_output *output);

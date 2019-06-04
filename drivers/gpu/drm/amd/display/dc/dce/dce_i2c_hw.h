@@ -29,8 +29,7 @@
 enum dc_i2c_status {
 	DC_I2C_STATUS__DC_I2C_STATUS_IDLE,
 	DC_I2C_STATUS__DC_I2C_STATUS_USED_BY_SW,
-	DC_I2C_STATUS__DC_I2C_STATUS_USED_BY_HW,
-	DC_I2C_REG_RW_CNTL_STATUS_DMCU_ONLY = 2,
+	DC_I2C_STATUS__DC_I2C_STATUS_USED_BY_HW
 };
 
 enum dc_i2c_arbitration {
@@ -130,8 +129,7 @@ enum {
 	I2C_SF(DC_I2C_DATA, DC_I2C_DATA, mask_sh),\
 	I2C_SF(DC_I2C_DATA, DC_I2C_INDEX, mask_sh),\
 	I2C_SF(DC_I2C_DATA, DC_I2C_INDEX_WRITE, mask_sh),\
-	I2C_SF(MICROSECOND_TIME_BASE_DIV, XTAL_REF_DIV, mask_sh),\
-	I2C_SF(DC_I2C_ARBITRATION, DC_I2C_REG_RW_CNTL_STATUS, mask_sh)
+	I2C_SF(MICROSECOND_TIME_BASE_DIV, XTAL_REF_DIV, mask_sh)
 
 #define I2C_COMMON_MASK_SH_LIST_DCE110(mask_sh)\
 	I2C_COMMON_MASK_SH_LIST_DCE_COMMON_BASE(mask_sh),\
@@ -172,7 +170,6 @@ struct dce_i2c_shift {
 	uint8_t DC_I2C_INDEX;
 	uint8_t DC_I2C_INDEX_WRITE;
 	uint8_t XTAL_REF_DIV;
-	uint8_t DC_I2C_REG_RW_CNTL_STATUS;
 };
 
 struct dce_i2c_mask {
@@ -210,7 +207,6 @@ struct dce_i2c_mask {
 	uint32_t DC_I2C_INDEX;
 	uint32_t DC_I2C_INDEX_WRITE;
 	uint32_t XTAL_REF_DIV;
-	uint32_t DC_I2C_REG_RW_CNTL_STATUS;
 };
 
 struct dce_i2c_registers {

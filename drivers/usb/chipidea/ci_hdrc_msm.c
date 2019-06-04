@@ -205,9 +205,12 @@ static int ci_hdrc_msm_probe(struct platform_device *pdev)
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
-	ci->fs_clk = clk = devm_clk_get_optional(&pdev->dev, "fs");
-	if (IS_ERR(clk))
-		return PTR_ERR(clk);
+	ci->fs_clk = clk = devm_clk_get(&pdev->dev, "fs");
+	if (IS_ERR(clk)) {
+		if (PTR_ERR(clk) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		ci->fs_clk = NULL;
+	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
 	ci->base = devm_ioremap_resource(&pdev->dev, res);

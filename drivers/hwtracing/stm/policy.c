@@ -440,8 +440,10 @@ stp_policy_make(struct config_group *group, const char *name)
 
 	stm->policy = kzalloc(sizeof(*stm->policy), GFP_KERNEL);
 	if (!stm->policy) {
-		ret = ERR_PTR(-ENOMEM);
-		goto unlock_policy;
+		mutex_unlock(&stm->policy_mutex);
+		stm_put_protocol(pdrv);
+		stm_put_device(stm);
+		return ERR_PTR(-ENOMEM);
 	}
 
 	config_group_init_type_name(&stm->policy->group, name,
@@ -456,11 +458,7 @@ unlock_policy:
 	mutex_unlock(&stm->policy_mutex);
 
 	if (IS_ERR(ret)) {
-		/*
-		 * pdrv and stm->pdrv at this point can be quite different,
-		 * and only one of them needs to be 'put'
-		 */
-		stm_put_protocol(pdrv);
+		stm_put_protocol(stm->pdrv);
 		stm_put_device(stm);
 	}
 

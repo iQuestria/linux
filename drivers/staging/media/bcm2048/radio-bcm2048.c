@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/staging/media/radio-bcm2048.c
  *
@@ -2404,7 +2403,7 @@ static int bcm2048_vidioc_g_audio(struct file *file, void *priv,
 	if (audio->index > 1)
 		return -EINVAL;
 
-	strscpy(audio->name, "Radio", sizeof(audio->name));
+	strncpy(audio->name, "Radio", 32);
 	audio->capability = V4L2_AUDCAP_STEREO;
 
 	return 0;
@@ -2432,7 +2431,7 @@ static int bcm2048_vidioc_g_tuner(struct file *file, void *priv,
 	if (tuner->index > 0)
 		return -EINVAL;
 
-	strscpy(tuner->name, "FM Receiver", sizeof(tuner->name));
+	strncpy(tuner->name, "FM Receiver", 32);
 	tuner->type = V4L2_TUNER_RADIO;
 	tuner->rangelow =
 		dev_to_v4l2(bcm2048_get_region_bottom_frequency(bdev));
@@ -2575,7 +2574,8 @@ static const struct video_device bcm2048_viddev_template = {
 /*
  *	I2C driver interface
  */
-static int bcm2048_i2c_driver_probe(struct i2c_client *client)
+static int bcm2048_i2c_driver_probe(struct i2c_client *client,
+				    const struct i2c_device_id *id)
 {
 	struct bcm2048_device *bdev;
 	int err;
@@ -2679,7 +2679,7 @@ static struct i2c_driver bcm2048_i2c_driver = {
 	.driver		= {
 		.name	= BCM2048_DRIVER_NAME,
 	},
-	.probe_new	= bcm2048_i2c_driver_probe,
+	.probe		= bcm2048_i2c_driver_probe,
 	.remove		= bcm2048_i2c_driver_remove,
 	.id_table	= bcm2048_id,
 };

@@ -249,7 +249,8 @@ void bch_debug_init_cache_set(struct cache_set *c)
 
 void bch_debug_exit(void)
 {
-	debugfs_remove_recursive(bcache_debug);
+	if (!IS_ERR_OR_NULL(bcache_debug))
+		debugfs_remove_recursive(bcache_debug);
 }
 
 void __init bch_debug_init(void)

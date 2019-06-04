@@ -119,8 +119,7 @@
 #define PPSMC_MSG_PrepareMp1ForShutdown          0x5A
 #define PPSMC_MSG_SetMGpuFanBoostLimitRpm        0x5D
 #define PPSMC_MSG_GetAVFSVoltageByDpm            0x5F
-#define PPSMC_MSG_BacoWorkAroundFlushVDCI        0x60
-#define PPSMC_Message_Count                      0x61
+#define PPSMC_Message_Count                      0x60
 
 typedef uint32_t PPSMC_Result;
 typedef uint32_t PPSMC_Msg;

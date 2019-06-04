@@ -1,10 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * STMicroelectronics sensors trigger library driver
  *
  * Copyright 2012-2013 STMicroelectronics Inc.
  *
  * Denis Ciocca <denis.ciocca@st.com>
+ *
+ * Licensed under the GPL-2.
  */
 
 #include <linux/kernel.h>
@@ -103,7 +104,7 @@ static irqreturn_t st_sensors_irq_thread(int irq, void *p)
 		return IRQ_HANDLED;
 
 	/*
-	 * If we are using edge IRQs, new samples arrived while processing
+	 * If we are using egde IRQs, new samples arrived while processing
 	 * the IRQ and those may be missed unless we pick them here, so poll
 	 * again. If the sensor delivery frequency is very high, this thread
 	 * turns into a polled loop handler.
@@ -147,7 +148,7 @@ int st_sensors_allocate_trigger(struct iio_dev *indio_dev,
 		if (!sdata->sensor_settings->drdy_irq.addr_ihl) {
 			dev_err(&indio_dev->dev,
 				"falling/low specified for IRQ "
-				"but hardware supports only rising/high: "
+				"but hardware only support rising/high: "
 				"will request rising/high\n");
 			if (irq_trig == IRQF_TRIGGER_FALLING)
 				irq_trig = IRQF_TRIGGER_RISING;

@@ -8,8 +8,6 @@
 # Copyright (C) 1994 by Linus Torvalds
 #
 
-KBUILD_DEFCONFIG := defconfig
-
 NM := $(NM) -B
 
 LDFLAGS_vmlinux	:= -static -N #-relax
@@ -62,9 +60,6 @@ bootimage bootpfile bootpzfile: vmlinux
 
 archclean:
 	$(Q)$(MAKE) $(clean)=$(boot)
-
-archheaders:
-	$(Q)$(MAKE) $(build)=arch/alpha/kernel/syscalls all
 
 define archhelp
   echo '* boot		- Compressed kernel image (arch/alpha/boot/vmlinux.gz)'

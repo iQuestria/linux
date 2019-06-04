@@ -62,22 +62,29 @@ static void sharp_ls_disconnect(struct omap_dss_device *src,
 {
 }
 
-static void sharp_ls_pre_enable(struct omap_dss_device *dssdev)
+static int sharp_ls_enable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	struct omap_dss_device *src = dssdev->src;
 	int r;
+
+	if (!omapdss_device_is_connected(dssdev))
+		return -ENODEV;
+
+	if (omapdss_device_is_enabled(dssdev))
+		return 0;
 
 	if (ddata->vcc) {
 		r = regulator_enable(ddata->vcc);
-		if (r)
-			dev_err(dssdev->dev, "%s: failed to enable regulator\n",
-				__func__);
+		if (r != 0)
+			return r;
 	}
-}
 
-static void sharp_ls_enable(struct omap_dss_device *dssdev)
-{
-	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	r = src->ops->enable(src);
+	if (r) {
+		regulator_disable(ddata->vcc);
+		return r;
+	}
 
 	/* wait couple of vsyncs until enabling the LCD */
 	msleep(50);
@@ -87,11 +94,19 @@ static void sharp_ls_enable(struct omap_dss_device *dssdev)
 
 	if (ddata->ini_gpio)
 		gpiod_set_value_cansleep(ddata->ini_gpio, 1);
+
+	dssdev->state = OMAP_DSS_DISPLAY_ACTIVE;
+
+	return 0;
 }
 
 static void sharp_ls_disable(struct omap_dss_device *dssdev)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	struct omap_dss_device *src = dssdev->src;
+
+	if (!omapdss_device_is_enabled(dssdev))
+		return;
 
 	if (ddata->ini_gpio)
 		gpiod_set_value_cansleep(ddata->ini_gpio, 0);
@@ -100,35 +115,33 @@ static void sharp_ls_disable(struct omap_dss_device *dssdev)
 		gpiod_set_value_cansleep(ddata->resb_gpio, 0);
 
 	/* wait at least 5 vsyncs after disabling the LCD */
-	msleep(100);
-}
 
-static void sharp_ls_post_disable(struct omap_dss_device *dssdev)
-{
-	struct panel_drv_data *ddata = to_panel_data(dssdev);
+	msleep(100);
+
+	src->ops->disable(src);
 
 	if (ddata->vcc)
 		regulator_disable(ddata->vcc);
+
+	dssdev->state = OMAP_DSS_DISPLAY_DISABLED;
 }
 
-static int sharp_ls_get_modes(struct omap_dss_device *dssdev,
-			      struct drm_connector *connector)
+static void sharp_ls_get_timings(struct omap_dss_device *dssdev,
+				 struct videomode *vm)
 {
 	struct panel_drv_data *ddata = to_panel_data(dssdev);
 
-	return omapdss_display_get_modes(connector, &ddata->vm);
+	*vm = ddata->vm;
 }
 
 static const struct omap_dss_device_ops sharp_ls_ops = {
 	.connect	= sharp_ls_connect,
 	.disconnect	= sharp_ls_disconnect,
 
-	.pre_enable	= sharp_ls_pre_enable,
 	.enable		= sharp_ls_enable,
 	.disable	= sharp_ls_disable,
-	.post_disable	= sharp_ls_post_disable,
 
-	.get_modes	= sharp_ls_get_modes,
+	.get_timings	= sharp_ls_get_timings,
 };
 
 static  int sharp_ls_get_gpio_of(struct device *dev, int index, int val,
@@ -207,18 +220,15 @@ static int sharp_ls_probe(struct platform_device *pdev)
 	dssdev->dev = &pdev->dev;
 	dssdev->ops = &sharp_ls_ops;
 	dssdev->type = OMAP_DISPLAY_TYPE_DPI;
-	dssdev->display = true;
 	dssdev->owner = THIS_MODULE;
 	dssdev->of_ports = BIT(0);
-	dssdev->ops_flags = OMAP_DSS_DEVICE_OP_MODES;
 
 	/*
 	 * Note: According to the panel documentation:
 	 * DATA needs to be driven on the FALLING edge
 	 */
-	dssdev->bus_flags = DRM_BUS_FLAG_DE_HIGH
-			  | DRM_BUS_FLAG_SYNC_DRIVE_NEGEDGE
-			  | DRM_BUS_FLAG_PIXDATA_DRIVE_POSEDGE;
+	dssdev->bus_flags = DRM_BUS_FLAG_DE_HIGH | DRM_BUS_FLAG_SYNC_NEGEDGE
+			  | DRM_BUS_FLAG_PIXDATA_POSEDGE;
 
 	omapdss_display_init(dssdev);
 	omapdss_device_register(dssdev);
@@ -233,10 +243,7 @@ static int __exit sharp_ls_remove(struct platform_device *pdev)
 
 	omapdss_device_unregister(dssdev);
 
-	if (omapdss_device_is_enabled(dssdev)) {
-		sharp_ls_disable(dssdev);
-		sharp_ls_post_disable(dssdev);
-	}
+	sharp_ls_disable(dssdev);
 
 	return 0;
 }
